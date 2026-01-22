@@ -119,10 +119,17 @@ Full-featured dashboard for managing brands/clients, tracking social media menti
 
 #### 14. Docker Deployment Setup
 - [x] Created Dockerfile with Playwright image
-- [x] Created docker-compose.yml (port 4001)
+- [x] Created docker-compose.yml (port 4003)
 - [x] Created nginx.conf with SSE support
 - [x] Created deploy.sh script
 - [x] Created DEPLOYMENT.md guide
+
+#### 15. Instagram Graph API Migration
+- [x] Created `instagramGraphService.js` using official Meta Graph API
+- [x] Updated controller to use Graph API service
+- [x] Added refresh-token endpoint for token management
+- [x] Removed dependency on instagram-private-api for search
+- [x] Graph API credentials configured via environment variables
 
 ---
 
@@ -179,16 +186,19 @@ backend/
 ├── config/instagram.js                 # API credentials
 ├── routes/
 │   ├── instagramRoutes.js              # Instagram API routes
-│   └── agentRoutes.js                  # NEW: Agent SSE & control routes
+│   └── agentRoutes.js                  # Agent SSE & control routes
+├── controllers/
+│   └── instagramController.js          # Request handlers
 ├── services/
-│   ├── instagramService.js             # Instagram scraping
-│   ├── imaiAgentService.js             # NEW: Playwright IMAI automation
-│   └── agentScheduler.js               # NEW: Job scheduling
-├── Dockerfile                          # NEW: Docker deployment
-├── docker-compose.yml                  # NEW: Container config
-├── nginx.conf                          # NEW: Reverse proxy config
-├── deploy.sh                           # NEW: Deployment script
-└── DEPLOYMENT.md                       # NEW: Deployment guide
+│   ├── instagramService.js             # Legacy Instagram scraping (fallback)
+│   ├── instagramGraphService.js        # Instagram Graph API (primary)
+│   ├── imaiAgentService.js             # Playwright IMAI automation
+│   └── agentScheduler.js               # Job scheduling
+├── Dockerfile                          # Docker deployment
+├── docker-compose.yml                  # Container config (port 4003)
+├── nginx.conf                          # Reverse proxy config
+├── deploy.sh                           # Deployment script
+└── DEPLOYMENT.md                       # Deployment guide
 ```
 
 ---
@@ -217,18 +227,23 @@ backend/
 ## Environment Variables Required
 
 ```env
-# Clerk Authentication
+# Clerk Authentication (Frontend)
 NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_...
 CLERK_SECRET_KEY=sk_test_...
 NEXT_PUBLIC_CLERK_SIGN_IN_URL=/sign-in
 NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up
 
-# API URL
-NEXT_PUBLIC_API_URL=http://localhost:4000
+# API URL (Frontend)
+NEXT_PUBLIC_API_URL=https://agent.influencerhq.io
 
-# IMAI Credentials
-IMAI_EMAIL=isabel@outsmartlabs.com
-IMAI_PASSWORD=Outsmart2026!
+# Instagram Graph API (Backend)
+INSTAGRAM_APP_ID=your_app_id
+INSTAGRAM_APP_SECRET=your_app_secret
+INSTAGRAM_ACCESS_TOKEN=your_access_token
+
+# IMAI Credentials (Backend)
+IMAI_EMAIL=your_imai_email
+IMAI_PASSWORD=your_imai_password
 ```
 
 ---
@@ -279,4 +294,4 @@ npm run dev
 ---
 
 ## Last Updated
-2026-01-23 (Real-time Agent Console & Docker Deployment)
+2026-01-23 (Instagram Graph API Migration)

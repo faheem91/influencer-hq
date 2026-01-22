@@ -26,4 +26,8 @@ router.get('/api/instagram/account', instagramController.getAccountInfo);
 // Example: POST /api/instagram/logout
 router.post('/api/instagram/logout', instagramController.logout);
 
+// Refresh access token (Graph API tokens expire after 60 days)
+// Example: POST /api/instagram/refresh-token
+router.post('/api/instagram/refresh-token', instagramController.refreshToken);
+
 module.exports = router;

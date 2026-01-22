@@ -1,8 +1,10 @@
-const instagramService = require('../services/instagramService');
+const instagramGraphService = require('../services/instagramGraphService');
 
 /**
- * Search Instagram posts by keyword (hashtag or mention) with pagination
+ * Search Instagram posts by keyword (hashtag or username) with pagination
  * GET /api/instagram/search?keyword={keyword}&page={page}&limit={limit}
+ *
+ * Uses official Instagram Graph API
  */
 exports.searchPosts = async (req, res) => {
     try {
@@ -13,7 +15,7 @@ exports.searchPosts = async (req, res) => {
             return res.status(400).json({
                 success: false,
                 error: 'Keyword parameter is required',
-                usage: 'GET /api/instagram/search?keyword=avneetkaur_13&page=1&limit=10',
+                usage: 'GET /api/instagram/search?keyword=travel&page=1&limit=10',
             });
         }
 
@@ -22,69 +24,49 @@ exports.searchPosts = async (req, res) => {
 
         console.log(`\n📡 API Request: Search for "${keyword}" (page ${pageNum}, limit ${limitNum})`);
 
-        // Search for posts
-        const results = await instagramService.searchByKeyword(keyword);
-
-        // Combine all posts
-        const allPosts = [...results.hashtagPosts, ...results.mentionPosts];
+        // Search for posts using Graph API
+        const posts = await instagramGraphService.searchByKeyword(keyword);
 
         // Apply pagination
         const startIndex = (pageNum - 1) * limitNum;
         const endIndex = startIndex + limitNum;
-        const paginatedPosts = allPosts.slice(startIndex, endIndex);
-        const totalPosts = allPosts.length;
+        const paginatedPosts = posts.slice(startIndex, endIndex);
+        const totalPosts = posts.length;
         const totalPages = Math.ceil(totalPosts / limitNum);
 
         // Response
         return res.status(200).json({
             success: true,
             data: {
-                keyword: results.keyword,
+                keyword: keyword,
                 totalPosts,
                 page: pageNum,
                 limit: limitNum,
                 totalPages,
                 hasMore: pageNum < totalPages,
                 posts: paginatedPosts,
-                hashtagResults: {
-                    count: results.hashtagPosts.length,
-                    posts: results.hashtagPosts.slice(startIndex, endIndex),
-                },
-                mentionResults: {
-                    count: results.mentionPosts.length,
-                    posts: results.mentionPosts.slice(startIndex, endIndex),
-                },
             },
             message: `Found ${totalPosts} posts for keyword "${keyword}" (showing ${paginatedPosts.length})`,
         });
     } catch (error) {
         console.error('❌ Search API Error:', error.message);
 
-        // Handle specific Instagram errors
-        if (error.message.includes('checkpoint')) {
-            return res.status(403).json({
+        // Handle Graph API specific errors
+        if (error.response?.data?.error?.code === 24) {
+            return res.status(429).json({
                 success: false,
-                error: 'Instagram checkpoint required',
-                message: 'Please log in to Instagram from a web browser and complete the verification',
-                details: error.message,
+                error: 'Hashtag search limit reached',
+                message: 'Instagram limits hashtag searches to 30 unique hashtags per 7 days',
+                details: error.response?.data?.error?.message || error.message,
             });
         }
 
-        if (error.message.includes('login') || error.message.includes('password') || error.message.includes('authentication')) {
+        if (error.response?.data?.error?.code === 190) {
             return res.status(401).json({
                 success: false,
-                error: 'Instagram authentication failed',
-                message: 'Please check your Instagram credentials in .env file',
-                details: error.message,
-            });
-        }
-
-        if (error.message.includes('Two-factor') || error.message.includes('2FA')) {
-            return res.status(401).json({
-                success: false,
-                error: 'Two-factor authentication error',
-                message: 'Please disable 2FA on your Instagram account for API access',
-                details: error.message,
+                error: 'Access token expired or invalid',
+                message: 'Please refresh your Instagram access token',
+                details: error.response?.data?.error?.message || error.message,
             });
         }
 
@@ -107,22 +89,31 @@ exports.searchPosts = async (req, res) => {
 };
 
 /**
- * Test endpoint to check if Instagram login is working
+ * Test endpoint to check if Instagram Graph API connection is working
  * GET /api/instagram/test
  */
 exports.testConnection = async (req, res) => {
     try {
-        console.log('\n🧪 Testing Instagram connection...');
-        await instagramService.login();
-        
-        return res.status(200).json({
-            success: true,
-            message: 'Instagram connection successful (using instagram-private-api)',
-            timestamp: new Date().toISOString(),
-        });
+        console.log('\n🧪 Testing Instagram Graph API connection...');
+        const result = await instagramGraphService.testConnection();
+
+        if (result.success) {
+            return res.status(200).json({
+                success: true,
+                message: 'Instagram Graph API connection successful',
+                account: result.account,
+                timestamp: new Date().toISOString(),
+            });
+        } else {
+            return res.status(500).json({
+                success: false,
+                error: 'Connection test failed',
+                message: result.error,
+            });
+        }
     } catch (error) {
         console.error('❌ Connection test failed:', error.message);
-        
+
         return res.status(500).json({
             success: false,
             error: 'Connection test failed',
@@ -137,15 +128,15 @@ exports.testConnection = async (req, res) => {
  */
 exports.getAccountInfo = async (req, res) => {
     try {
-        const accountInfo = await instagramService.getAccountInfo();
-        
+        const accountInfo = await instagramGraphService.getAccountInfo();
+
         return res.status(200).json({
             success: true,
             data: accountInfo,
         });
     } catch (error) {
         console.error('❌ Account info error:', error.message);
-        
+
         return res.status(500).json({
             success: false,
             error: 'Failed to get account info',
@@ -155,23 +146,36 @@ exports.getAccountInfo = async (req, res) => {
 };
 
 /**
- * Logout from Instagram
+ * Logout from Instagram (Graph API doesn't have session-based login)
  * POST /api/instagram/logout
  */
 exports.logout = async (req, res) => {
+    // Graph API uses tokens, no logout needed
+    return res.status(200).json({
+        success: true,
+        message: 'Graph API uses access tokens - no logout needed',
+    });
+};
+
+/**
+ * Refresh access token
+ * POST /api/instagram/refresh-token
+ */
+exports.refreshToken = async (req, res) => {
     try {
-        await instagramService.logout();
+        const result = await instagramGraphService.refreshToken();
 
         return res.status(200).json({
             success: true,
-            message: 'Logged out successfully',
+            message: 'Token refreshed successfully',
+            expiresIn: result.expires_in,
         });
     } catch (error) {
-        console.error('❌ Logout error:', error.message);
+        console.error('❌ Token refresh error:', error.message);
 
         return res.status(500).json({
             success: false,
-            error: 'Logout failed',
+            error: 'Token refresh failed',
             message: error.message,
         });
     }
@@ -190,27 +194,24 @@ exports.searchPostsAll = async (req, res) => {
             return res.status(400).json({
                 success: false,
                 error: 'Keyword parameter is required',
-                usage: 'GET /api/instagram/search/all?keyword=avneetkaur_13',
+                usage: 'GET /api/instagram/search/all?keyword=travel',
             });
         }
 
         console.log(`\n📡 API Request: Search ALL for "${keyword}"`);
 
-        // Search for posts
-        const results = await instagramService.searchByKeyword(keyword);
-
-        // Combine all posts
-        const allPosts = [...results.hashtagPosts, ...results.mentionPosts];
+        // Search for posts using Graph API
+        const posts = await instagramGraphService.searchByKeyword(keyword);
 
         // Response with all posts (no pagination)
         return res.status(200).json({
             success: true,
             data: {
-                keyword: results.keyword,
-                totalPosts: allPosts.length,
-                posts: allPosts,
+                keyword: keyword,
+                totalPosts: posts.length,
+                posts: posts,
             },
-            message: `Found ${allPosts.length} posts for keyword "${keyword}"`,
+            message: `Found ${posts.length} posts for keyword "${keyword}"`,
         });
     } catch (error) {
         console.error('❌ Search All API Error:', error.message);
