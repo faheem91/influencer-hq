@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { DashboardLayout } from "@/components/layout";
 import { ClientForm } from "@/components/clients";
-import { storage } from "@/lib/storage";
-import { Client, ClientFormData } from "@/types/client";
+import { getClient } from "@/db/queries";
+import { Client } from "@/db/schema";
 import { Skeleton } from "@/components/ui/skeleton";
 
 export default function EditClientPage() {
@@ -13,19 +13,22 @@ export default function EditClientPage() {
   const router = useRouter();
   const [client, setClient] = useState<Client | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isPending, startTransition] = useTransition();
   const clientId = params.id as string;
 
   useEffect(() => {
-    const clientData = storage.getClient(clientId);
-    if (clientData) {
-      setClient(clientData);
-    } else {
-      router.push("/clients");
-    }
-    setLoading(false);
+    startTransition(async () => {
+      const clientData = await getClient(clientId);
+      if (clientData) {
+        setClient(clientData);
+      } else {
+        router.push("/clients");
+      }
+      setLoading(false);
+    });
   }, [clientId, router]);
 
-  if (loading) {
+  if (loading || isPending) {
     return (
       <DashboardLayout title="Edit Client" description="Loading...">
         <div className="mx-auto max-w-3xl space-y-6">
@@ -41,12 +44,20 @@ export default function EditClientPage() {
     return null;
   }
 
-  const initialData: ClientFormData = {
+  // Map database schema to form data format
+  const initialData = {
     name: client.name,
-    logo: client.logo,
-    description: client.description,
-    tracking: client.tracking,
-    imai: client.imai,
+    logo: client.logo || undefined,
+    description: client.description || undefined,
+    tracking: client.tracking || {
+      instagram: { handle: "", hashtags: [], locations: [] },
+      facebook: { handle: "", hashtags: [], locations: [] },
+      tiktok: { handle: "", hashtags: [] },
+    },
+    imai: {
+      accountId: client.imaiAccountId || "",
+      campaignId: client.imaiCampaignId || "",
+    },
     checkInterval: client.checkInterval,
   };
 

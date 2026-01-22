@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { DashboardLayout } from "@/components/layout";
@@ -16,8 +16,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { storage } from "@/lib/storage";
-import { Client, TrackedCreator } from "@/types";
+import { getClient, getCreators, exportCreatorsCSV } from "@/db/queries";
+import { Client, TrackedCreator } from "@/db/schema";
 import { ArrowLeft, Download, Users, ExternalLink } from "lucide-react";
 
 export default function ClientCreatorsPage() {
@@ -25,20 +25,24 @@ export default function ClientCreatorsPage() {
   const router = useRouter();
   const [client, setClient] = useState<Client | null>(null);
   const [creators, setCreators] = useState<TrackedCreator[]>([]);
+  const [isPending, startTransition] = useTransition();
   const clientId = params.id as string;
 
   useEffect(() => {
-    const clientData = storage.getClient(clientId);
-    if (clientData) {
-      setClient(clientData);
-      setCreators(storage.getCreators(clientId));
-    } else {
-      router.push("/clients");
-    }
+    startTransition(async () => {
+      const clientData = await getClient(clientId);
+      if (clientData) {
+        setClient(clientData);
+        const creatorsData = await getCreators(clientId);
+        setCreators(creatorsData);
+      } else {
+        router.push("/clients");
+      }
+    });
   }, [clientId, router]);
 
-  const handleExportCSV = () => {
-    const csv = storage.exportCreatorsCSV(clientId);
+  const handleExportCSV = async () => {
+    const csv = await exportCreatorsCSV(clientId);
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -49,7 +53,7 @@ export default function ClientCreatorsPage() {
   };
 
   const handleExportJSON = () => {
-    const json = storage.exportCreators(clientId);
+    const json = JSON.stringify(creators, null, 2);
     const blob = new Blob([json], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -164,7 +168,7 @@ export default function ClientCreatorsPage() {
                       <TableCell>
                         <div className="flex items-center gap-3">
                           <Avatar>
-                            <AvatarImage src={creator.profilePicUrl} />
+                            <AvatarImage src={creator.profilePicUrl || undefined} />
                             <AvatarFallback>
                               {creator.username.charAt(0).toUpperCase()}
                             </AvatarFallback>

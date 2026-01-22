@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { DashboardLayout } from "@/components/layout";
@@ -8,8 +8,14 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { storage } from "@/lib/storage";
-import { Client, Agent } from "@/types";
+import {
+  getClient,
+  getAgent,
+  getCreators,
+  createAgent,
+  updateAgentStatus,
+} from "@/db/queries";
+import { Client, Agent, TrackedCreator } from "@/db/schema";
 import {
   Edit,
   Bot,
@@ -27,41 +33,56 @@ export default function ClientDetailPage() {
   const router = useRouter();
   const [client, setClient] = useState<Client | null>(null);
   const [agent, setAgent] = useState<Agent | null>(null);
+  const [creatorsCount, setCreatorsCount] = useState(0);
+  const [isPending, startTransition] = useTransition();
   const clientId = params.id as string;
 
-  useEffect(() => {
-    const clientData = storage.getClient(clientId);
-    if (clientData) {
-      setClient(clientData);
-      if (clientData.agentId) {
-        setAgent(storage.getAgent(clientData.agentId) || null);
+  const loadData = () => {
+    startTransition(async () => {
+      const clientData = await getClient(clientId);
+      if (clientData) {
+        setClient(clientData);
+        if (clientData.agentId) {
+          const agentData = await getAgent(clientData.agentId);
+          setAgent(agentData || null);
+        }
+        const creators = await getCreators(clientId);
+        setCreatorsCount(creators.length);
+      } else {
+        router.push("/clients");
       }
-    } else {
-      router.push("/clients");
-    }
+    });
+  };
+
+  useEffect(() => {
+    loadData();
   }, [clientId, router]);
 
   const handleSpawnAgent = () => {
     if (client) {
-      const newAgent = storage.createAgent(client.id, client.name);
-      setAgent(newAgent);
-      setClient(storage.getClient(clientId) || null);
+      startTransition(async () => {
+        const newAgent = await createAgent(client.id, client.name);
+        setAgent(newAgent);
+        const updatedClient = await getClient(clientId);
+        setClient(updatedClient || null);
+      });
     }
   };
 
   const handleToggleAgent = () => {
     if (agent) {
-      const newStatus = agent.status === "running" ? "paused" : "running";
-      storage.updateAgentStatus(agent.id, newStatus);
-      setAgent(storage.getAgent(agent.id) || null);
+      startTransition(async () => {
+        const newStatus = agent.status === "running" ? "paused" : "running";
+        await updateAgentStatus(agent.id, newStatus);
+        const updatedAgent = await getAgent(agent.id);
+        setAgent(updatedAgent || null);
+      });
     }
   };
 
   if (!client) {
     return null;
   }
-
-  const creatorsCount = storage.getCreators(clientId).length;
 
   return (
     <DashboardLayout title={client.name} description="Client details">
@@ -74,7 +95,7 @@ export default function ClientDetailPage() {
             </div>
             <div>
               <h2 className="text-2xl font-bold">{client.name}</h2>
-              {client.tracking.instagram.handle && (
+              {client.tracking?.instagram?.handle && (
                 <p className="text-muted-foreground">
                   @{client.tracking.instagram.handle}
                 </p>
@@ -156,9 +177,9 @@ export default function ClientDetailPage() {
                     Hashtags Tracked
                   </p>
                   <p className="text-2xl font-bold">
-                    {(client.tracking.instagram.hashtags?.length || 0) +
-                      (client.tracking.facebook.hashtags?.length || 0) +
-                      (client.tracking.tiktok.hashtags?.length || 0)}
+                    {(client.tracking?.instagram?.hashtags?.length || 0) +
+                      (client.tracking?.facebook?.hashtags?.length || 0) +
+                      (client.tracking?.tiktok?.hashtags?.length || 0)}
                   </p>
                 </div>
                 <Hash className="h-8 w-8 text-muted-foreground" />
@@ -173,8 +194,8 @@ export default function ClientDetailPage() {
                     Locations Tracked
                   </p>
                   <p className="text-2xl font-bold">
-                    {(client.tracking.instagram.locations?.length || 0) +
-                      (client.tracking.facebook.locations?.length || 0)}
+                    {(client.tracking?.instagram?.locations?.length || 0) +
+                      (client.tracking?.facebook?.locations?.length || 0)}
                   </p>
                 </div>
                 <MapPin className="h-8 w-8 text-muted-foreground" />
@@ -204,14 +225,14 @@ export default function ClientDetailPage() {
                     <p className="text-sm font-medium text-muted-foreground">
                       Handle
                     </p>
-                    <p>@{client.tracking.instagram.handle || "Not set"}</p>
+                    <p>@{client.tracking?.instagram?.handle || "Not set"}</p>
                   </div>
                   <div>
                     <p className="text-sm font-medium text-muted-foreground mb-2">
                       Hashtags
                     </p>
                     <div className="flex flex-wrap gap-1">
-                      {client.tracking.instagram.hashtags?.length > 0 ? (
+                      {client.tracking?.instagram?.hashtags?.length > 0 ? (
                         client.tracking.instagram.hashtags.map((tag) => (
                           <Badge key={tag} variant="secondary">
                             #{tag}
@@ -227,7 +248,7 @@ export default function ClientDetailPage() {
                       Locations
                     </p>
                     <div className="flex flex-wrap gap-1">
-                      {client.tracking.instagram.locations?.length > 0 ? (
+                      {client.tracking?.instagram?.locations?.length > 0 ? (
                         client.tracking.instagram.locations.map((loc) => (
                           <Badge key={loc} variant="outline">
                             {loc}
@@ -258,14 +279,14 @@ export default function ClientDetailPage() {
                     <p className="text-sm font-medium text-muted-foreground">
                       Handle
                     </p>
-                    <p>@{client.tracking.facebook.handle || "Not set"}</p>
+                    <p>@{client.tracking?.facebook?.handle || "Not set"}</p>
                   </div>
                   <div>
                     <p className="text-sm font-medium text-muted-foreground mb-2">
                       Hashtags
                     </p>
                     <div className="flex flex-wrap gap-1">
-                      {client.tracking.facebook.hashtags?.length > 0 ? (
+                      {client.tracking?.facebook?.hashtags?.length > 0 ? (
                         client.tracking.facebook.hashtags.map((tag) => (
                           <Badge key={tag} variant="secondary">
                             #{tag}
@@ -281,7 +302,7 @@ export default function ClientDetailPage() {
                       Locations
                     </p>
                     <div className="flex flex-wrap gap-1">
-                      {client.tracking.facebook.locations?.length > 0 ? (
+                      {client.tracking?.facebook?.locations?.length > 0 ? (
                         client.tracking.facebook.locations.map((loc) => (
                           <Badge key={loc} variant="outline">
                             {loc}
@@ -312,14 +333,14 @@ export default function ClientDetailPage() {
                     <p className="text-sm font-medium text-muted-foreground">
                       Handle
                     </p>
-                    <p>@{client.tracking.tiktok.handle || "Not set"}</p>
+                    <p>@{client.tracking?.tiktok?.handle || "Not set"}</p>
                   </div>
                   <div>
                     <p className="text-sm font-medium text-muted-foreground mb-2">
                       Hashtags
                     </p>
                     <div className="flex flex-wrap gap-1">
-                      {client.tracking.tiktok.hashtags?.length > 0 ? (
+                      {client.tracking?.tiktok?.hashtags?.length > 0 ? (
                         client.tracking.tiktok.hashtags.map((tag) => (
                           <Badge key={tag} variant="secondary">
                             #{tag}
@@ -419,13 +440,13 @@ export default function ClientDetailPage() {
                     <p className="text-sm font-medium text-muted-foreground">
                       Account ID
                     </p>
-                    <p>{client.imai.accountId || "Not configured"}</p>
+                    <p>{client.imaiAccountId || "Not configured"}</p>
                   </div>
                   <div>
                     <p className="text-sm font-medium text-muted-foreground">
                       Campaign ID
                     </p>
-                    <p>{client.imai.campaignId || "Not configured"}</p>
+                    <p>{client.imaiCampaignId || "Not configured"}</p>
                   </div>
                   <div>
                     <p className="text-sm font-medium text-muted-foreground">

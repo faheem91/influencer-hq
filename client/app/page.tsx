@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { DashboardLayout } from "@/components/layout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { storage } from "@/lib/storage";
-import { Client, Agent, AgentStats } from "@/types";
+import { getClients, getAgents, getAgentStats } from "@/db/queries";
+import { Client, Agent } from "@/db/schema";
 import {
   Users,
   Bot,
@@ -16,6 +16,15 @@ import {
   Activity,
 } from "lucide-react";
 import Link from "next/link";
+
+interface AgentStats {
+  totalAgents: number;
+  runningAgents: number;
+  idleAgents: number;
+  errorAgents: number;
+  pausedAgents: number;
+  totalCreatorsAdded: number;
+}
 
 export default function DashboardPage() {
   const [clients, setClients] = useState<Client[]>([]);
@@ -28,11 +37,19 @@ export default function DashboardPage() {
     pausedAgents: 0,
     totalCreatorsAdded: 0,
   });
+  const [isPending, startTransition] = useTransition();
 
   useEffect(() => {
-    setClients(storage.getClients());
-    setAgents(storage.getAgents());
-    setAgentStats(storage.getAgentStats());
+    startTransition(async () => {
+      const [clientsData, agentsData, statsData] = await Promise.all([
+        getClients(),
+        getAgents(),
+        getAgentStats(),
+      ]);
+      setClients(clientsData);
+      setAgents(agentsData);
+      setAgentStats(statsData);
+    });
   }, []);
 
   const recentClients = clients.slice(0, 5);
@@ -147,7 +164,7 @@ export default function DashboardPage() {
                         <div>
                           <p className="font-medium">{client.name}</p>
                           <p className="text-sm text-muted-foreground">
-                            @{client.tracking.instagram.handle || "No handle"}
+                            @{client.tracking?.instagram?.handle || "No handle"}
                           </p>
                         </div>
                       </div>

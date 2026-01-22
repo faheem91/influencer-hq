@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useTransition } from "react";
 import Link from "next/link";
 import { DashboardLayout } from "@/components/layout";
 import { ClientCard } from "@/components/clients";
@@ -14,8 +14,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { storage } from "@/lib/storage";
-import { Client } from "@/types";
+import { getClients, deleteClient } from "@/db/queries";
+import { Client } from "@/db/schema";
 import { Plus, Search, Users } from "lucide-react";
 
 export default function ClientsPage() {
@@ -24,9 +24,17 @@ export default function ClientsPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [clientToDelete, setClientToDelete] = useState<string | null>(null);
+  const [isPending, startTransition] = useTransition();
+
+  const loadClients = () => {
+    startTransition(async () => {
+      const data = await getClients();
+      setClients(data);
+    });
+  };
 
   useEffect(() => {
-    setClients(storage.getClients());
+    loadClients();
   }, []);
 
   useEffect(() => {
@@ -34,7 +42,7 @@ export default function ClientsPage() {
       const filtered = clients.filter(
         (client) =>
           client.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          client.tracking.instagram.handle
+          client.tracking?.instagram?.handle
             ?.toLowerCase()
             .includes(searchQuery.toLowerCase())
       );
@@ -51,10 +59,12 @@ export default function ClientsPage() {
 
   const handleDeleteConfirm = () => {
     if (clientToDelete) {
-      storage.deleteClient(clientToDelete);
-      setClients(storage.getClients());
-      setDeleteDialogOpen(false);
-      setClientToDelete(null);
+      startTransition(async () => {
+        await deleteClient(clientToDelete);
+        loadClients();
+        setDeleteDialogOpen(false);
+        setClientToDelete(null);
+      });
     }
   };
 

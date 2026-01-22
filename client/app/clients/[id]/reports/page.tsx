@@ -1,14 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { DashboardLayout } from "@/components/layout";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { storage } from "@/lib/storage";
-import { Client, TrackedCreator, Agent } from "@/types";
-import { ArrowLeft, Download, FileText, FileJson, Users, Bot } from "lucide-react";
+import { getClient, getCreators, getAgent, getAgentLogs, exportCreatorsCSV } from "@/db/queries";
+import { Client, TrackedCreator, Agent, AgentLog } from "@/db/schema";
+import { ArrowLeft, Download, FileText, FileJson, Users } from "lucide-react";
 
 export default function ClientReportsPage() {
   const params = useParams();
@@ -16,23 +16,33 @@ export default function ClientReportsPage() {
   const [client, setClient] = useState<Client | null>(null);
   const [creators, setCreators] = useState<TrackedCreator[]>([]);
   const [agent, setAgent] = useState<Agent | null>(null);
+  const [agentLogs, setAgentLogs] = useState<AgentLog[]>([]);
+  const [isPending, startTransition] = useTransition();
   const clientId = params.id as string;
 
   useEffect(() => {
-    const clientData = storage.getClient(clientId);
-    if (clientData) {
-      setClient(clientData);
-      setCreators(storage.getCreators(clientId));
-      if (clientData.agentId) {
-        setAgent(storage.getAgent(clientData.agentId) || null);
+    startTransition(async () => {
+      const clientData = await getClient(clientId);
+      if (clientData) {
+        setClient(clientData);
+        const creatorsData = await getCreators(clientId);
+        setCreators(creatorsData);
+        if (clientData.agentId) {
+          const agentData = await getAgent(clientData.agentId);
+          setAgent(agentData || null);
+          if (agentData) {
+            const logs = await getAgentLogs(agentData.id);
+            setAgentLogs(logs);
+          }
+        }
+      } else {
+        router.push("/clients");
       }
-    } else {
-      router.push("/clients");
-    }
+    });
   }, [clientId, router]);
 
-  const handleExportCreatorsCSV = () => {
-    const csv = storage.exportCreatorsCSV(clientId);
+  const handleExportCreatorsCSV = async () => {
+    const csv = await exportCreatorsCSV(clientId);
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -43,7 +53,7 @@ export default function ClientReportsPage() {
   };
 
   const handleExportCreatorsJSON = () => {
-    const json = storage.exportCreators(clientId);
+    const json = JSON.stringify(creators, null, 2);
     const blob = new Blob([json], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -59,6 +69,7 @@ export default function ClientReportsPage() {
       client,
       creators,
       agent,
+      agentLogs,
       exportedAt: new Date().toISOString(),
     };
     const json = JSON.stringify(data, null, 2);
@@ -188,7 +199,7 @@ export default function ClientReportsPage() {
                 <p className="text-sm font-medium text-muted-foreground">
                   Agent Runs
                 </p>
-                <p className="text-2xl font-bold">{agent?.logs.length || 0}</p>
+                <p className="text-2xl font-bold">{agentLogs.length}</p>
               </div>
             </div>
           </CardContent>

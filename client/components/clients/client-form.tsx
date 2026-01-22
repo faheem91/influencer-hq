@@ -1,9 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { ClientFormData, defaultClientFormData } from "@/types/client";
-import { storage } from "@/lib/storage";
+import { createClient, updateClient } from "@/db/queries";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -11,6 +10,38 @@ import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TrackingConfig } from "./tracking-config";
+
+interface ClientFormData {
+  name: string;
+  logo?: string;
+  description?: string;
+  tracking: {
+    instagram: { handle: string; hashtags: string[]; locations: string[] };
+    facebook: { handle: string; hashtags: string[]; locations: string[] };
+    tiktok: { handle: string; hashtags: string[] };
+  };
+  imai: {
+    accountId: string;
+    campaignId: string;
+  };
+  checkInterval: number;
+}
+
+const defaultFormData: ClientFormData = {
+  name: "",
+  logo: "",
+  description: "",
+  tracking: {
+    instagram: { handle: "", hashtags: [], locations: [] },
+    facebook: { handle: "", hashtags: [], locations: [] },
+    tiktok: { handle: "", hashtags: [] },
+  },
+  imai: {
+    accountId: "",
+    campaignId: "",
+  },
+  checkInterval: 12,
+};
 
 interface ClientFormProps {
   initialData?: ClientFormData;
@@ -25,26 +56,41 @@ export function ClientForm({
 }: ClientFormProps) {
   const router = useRouter();
   const [formData, setFormData] = useState<ClientFormData>(
-    initialData || defaultClientFormData
+    initialData || defaultFormData
   );
-  const [loading, setLoading] = useState(false);
+  const [isPending, startTransition] = useTransition();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
 
-    try {
-      if (isEditing && clientId) {
-        storage.updateClient(clientId, formData);
-      } else {
-        storage.createClient(formData);
+    startTransition(async () => {
+      try {
+        if (isEditing && clientId) {
+          await updateClient(clientId, {
+            name: formData.name,
+            logo: formData.logo || null,
+            description: formData.description || null,
+            tracking: formData.tracking,
+            imaiAccountId: formData.imai.accountId || null,
+            imaiCampaignId: formData.imai.campaignId || null,
+            checkInterval: formData.checkInterval,
+          });
+        } else {
+          await createClient({
+            name: formData.name,
+            logo: formData.logo || null,
+            description: formData.description || null,
+            tracking: formData.tracking,
+            imaiAccountId: formData.imai.accountId || null,
+            imaiCampaignId: formData.imai.campaignId || null,
+            checkInterval: formData.checkInterval,
+          });
+        }
+        router.push("/clients");
+      } catch (error) {
+        console.error("Error saving client:", error);
       }
-      router.push("/clients");
-    } catch (error) {
-      console.error("Error saving client:", error);
-    } finally {
-      setLoading(false);
-    }
+    });
   };
 
   const updateTracking = (
@@ -260,8 +306,8 @@ export function ClientForm({
         >
           Cancel
         </Button>
-        <Button type="submit" disabled={loading}>
-          {loading
+        <Button type="submit" disabled={isPending}>
+          {isPending
             ? "Saving..."
             : isEditing
             ? "Update Client"

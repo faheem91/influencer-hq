@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import { DashboardLayout } from "@/components/layout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
-import { storage } from "@/lib/storage";
+import { getClients, getAgents, getCreators } from "@/db/queries";
 import { Download, Upload, Trash2, Key, Bell, Database } from "lucide-react";
 
 export default function SettingsPage() {
@@ -16,34 +16,39 @@ export default function SettingsPage() {
   const [imaiPassword, setImaiPassword] = useState("");
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [autoRunEnabled, setAutoRunEnabled] = useState(true);
+  const [isPending, startTransition] = useTransition();
 
-  const handleExportAll = () => {
-    const data = {
-      clients: storage.getClients(),
-      agents: storage.getAgents(),
-      creators: storage.getCreators(),
-      exportedAt: new Date().toISOString(),
-    };
-    const json = JSON.stringify(data, null, 2);
-    const blob = new Blob([json], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `influencer-hq-backup-${Date.now()}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+  const handleExportAll = async () => {
+    startTransition(async () => {
+      const [clients, agents, creators] = await Promise.all([
+        getClients(),
+        getAgents(),
+        getCreators(),
+      ]);
+      const data = {
+        clients,
+        agents,
+        creators,
+        exportedAt: new Date().toISOString(),
+      };
+      const json = JSON.stringify(data, null, 2);
+      const blob = new Blob([json], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `influencer-hq-backup-${Date.now()}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    });
   };
 
   const handleClearData = () => {
     if (
       window.confirm(
-        "Are you sure you want to clear all data? This cannot be undone."
+        "Are you sure you want to clear all data? This cannot be undone. Note: This will only work if you have direct database access."
       )
     ) {
-      localStorage.removeItem("influencerHQ_clients");
-      localStorage.removeItem("influencerHQ_agents");
-      localStorage.removeItem("influencerHQ_creators");
-      window.location.reload();
+      alert("Data clearing requires direct database access. Please use database management tools to clear data.");
     }
   };
 
@@ -142,7 +147,7 @@ export default function SettingsPage() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex flex-wrap gap-4">
-              <Button variant="outline" onClick={handleExportAll}>
+              <Button variant="outline" onClick={handleExportAll} disabled={isPending}>
                 <Download className="mr-2 h-4 w-4" />
                 Export All Data
               </Button>
@@ -214,6 +219,9 @@ export default function SettingsPage() {
               <p>Version 1.0.0</p>
               <p>
                 Built with Next.js, TypeScript, Tailwind CSS, and ShadCN UI
+              </p>
+              <p className="text-green-600">
+                Database: Vercel Postgres with Drizzle ORM
               </p>
             </div>
           </CardContent>

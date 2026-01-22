@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { DashboardLayout } from "@/components/layout";
@@ -8,8 +8,14 @@ import { AgentLogs } from "@/components/agents";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { storage } from "@/lib/storage";
-import { Agent, Client } from "@/types";
+import {
+  getAgent,
+  getClient,
+  getAgentLogs,
+  updateAgentStatus,
+  addAgentLog,
+} from "@/db/queries";
+import { Agent, Client, AgentLog } from "@/db/schema";
 import {
   ArrowLeft,
   Bot,
@@ -26,19 +32,25 @@ export default function AgentDetailPage() {
   const router = useRouter();
   const [agent, setAgent] = useState<Agent | null>(null);
   const [client, setClient] = useState<Client | null>(null);
+  const [logs, setLogs] = useState<AgentLog[]>([]);
+  const [isPending, startTransition] = useTransition();
   const agentId = params.id as string;
 
   const loadData = () => {
-    const agentData = storage.getAgent(agentId);
-    if (agentData) {
-      setAgent(agentData);
-      const clientData = storage.getClient(agentData.clientId);
-      if (clientData) {
-        setClient(clientData);
+    startTransition(async () => {
+      const agentData = await getAgent(agentId);
+      if (agentData) {
+        setAgent(agentData);
+        const clientData = await getClient(agentData.clientId);
+        if (clientData) {
+          setClient(clientData);
+        }
+        const logsData = await getAgentLogs(agentId);
+        setLogs(logsData);
+      } else {
+        router.push("/agents");
       }
-    } else {
-      router.push("/agents");
-    }
+    });
   };
 
   useEffect(() => {
@@ -47,46 +59,50 @@ export default function AgentDetailPage() {
 
   const handleStatusChange = (status: Agent["status"]) => {
     if (agent) {
-      storage.updateAgentStatus(agent.id, status);
-      loadData();
+      startTransition(async () => {
+        await updateAgentStatus(agent.id, status);
+        loadData();
+      });
     }
   };
 
   const handleManualRun = () => {
     if (agent) {
-      // Simulate a manual run
-      storage.addAgentLog(agent.id, {
-        action: "Manual run triggered",
-        result: "info",
-        details: "Agent will check for new mentions",
+      startTransition(async () => {
+        // Log the manual run trigger
+        await addAgentLog(agent.id, {
+          action: "Manual run triggered",
+          result: "info",
+          details: "Agent will check for new mentions",
+        });
+        await updateAgentStatus(agent.id, "running");
+
+        // Simulate some work (in a real app, this would trigger actual agent work)
+        setTimeout(async () => {
+          await addAgentLog(agent.id, {
+            action: "Checking Instagram mentions",
+            result: "success",
+            details: `Searched for @${client?.tracking?.instagram?.handle || "handle"}`,
+          });
+          loadData();
+        }, 1000);
+
+        setTimeout(async () => {
+          await addAgentLog(agent.id, {
+            action: "Checking hashtags",
+            result: "success",
+            details: `Searched ${
+              (client?.tracking?.instagram?.hashtags?.length || 0) +
+              (client?.tracking?.facebook?.hashtags?.length || 0) +
+              (client?.tracking?.tiktok?.hashtags?.length || 0)
+            } hashtags`,
+          });
+          await updateAgentStatus(agent.id, "idle");
+          loadData();
+        }, 2000);
+
+        loadData();
       });
-      storage.updateAgentStatus(agent.id, "running");
-
-      // Simulate some work
-      setTimeout(() => {
-        storage.addAgentLog(agent.id, {
-          action: "Checking Instagram mentions",
-          result: "success",
-          details: `Searched for @${client?.tracking.instagram.handle || "handle"}`,
-        });
-        loadData();
-      }, 1000);
-
-      setTimeout(() => {
-        storage.addAgentLog(agent.id, {
-          action: "Checking hashtags",
-          result: "success",
-          details: `Searched ${
-            (client?.tracking.instagram.hashtags?.length || 0) +
-            (client?.tracking.facebook.hashtags?.length || 0) +
-            (client?.tracking.tiktok.hashtags?.length || 0)
-          } hashtags`,
-        });
-        storage.updateAgentStatus(agent.id, "idle");
-        loadData();
-      }, 2000);
-
-      loadData();
     }
   };
 
@@ -106,6 +122,14 @@ export default function AgentDetailPage() {
         return "secondary";
     }
   };
+
+  // Convert logs to the format expected by AgentLogs component
+  const formattedLogs = logs.map((log) => ({
+    timestamp: log.timestamp.toISOString(),
+    action: log.action,
+    result: log.result,
+    details: log.details || undefined,
+  }));
 
   return (
     <DashboardLayout
@@ -215,7 +239,7 @@ export default function AgentDetailPage() {
                   <span>Total Runs</span>
                 </div>
                 <span className="text-xl font-bold">
-                  {agent.logs.filter((l) => l.action.includes("run")).length}
+                  {logs.filter((l) => l.action.includes("run")).length}
                 </span>
               </div>
               <div className="flex items-center justify-between">
@@ -224,7 +248,7 @@ export default function AgentDetailPage() {
                   <span>Errors</span>
                 </div>
                 <span className="text-xl font-bold text-red-600">
-                  {agent.errors.length}
+                  {(agent.errors as string[] || []).length}
                 </span>
               </div>
             </CardContent>
@@ -236,11 +260,11 @@ export default function AgentDetailPage() {
           <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle>Activity Logs</CardTitle>
             <p className="text-sm text-muted-foreground">
-              {agent.logs.length} entries
+              {logs.length} entries
             </p>
           </CardHeader>
           <CardContent>
-            <AgentLogs logs={agent.logs} />
+            <AgentLogs logs={formattedLogs} />
           </CardContent>
         </Card>
 

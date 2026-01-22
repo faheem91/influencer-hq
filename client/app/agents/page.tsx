@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { DashboardLayout } from "@/components/layout";
 import { AgentCard } from "@/components/agents";
 import { Button } from "@/components/ui/button";
@@ -13,9 +13,18 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { storage } from "@/lib/storage";
-import { Agent, AgentStats } from "@/types";
+import { getAgents, getAgentStats, updateAgentStatus, deleteAgent } from "@/db/queries";
+import { Agent } from "@/db/schema";
 import { Bot, Play, Pause, AlertCircle, CheckCircle } from "lucide-react";
+
+interface AgentStats {
+  totalAgents: number;
+  runningAgents: number;
+  idleAgents: number;
+  errorAgents: number;
+  pausedAgents: number;
+  totalCreatorsAdded: number;
+}
 
 export default function AgentsPage() {
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -29,10 +38,17 @@ export default function AgentsPage() {
   });
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [agentToDelete, setAgentToDelete] = useState<string | null>(null);
+  const [isPending, startTransition] = useTransition();
 
   const loadData = () => {
-    setAgents(storage.getAgents());
-    setStats(storage.getAgentStats());
+    startTransition(async () => {
+      const [agentsData, statsData] = await Promise.all([
+        getAgents(),
+        getAgentStats(),
+      ]);
+      setAgents(agentsData);
+      setStats(statsData);
+    });
   };
 
   useEffect(() => {
@@ -40,8 +56,10 @@ export default function AgentsPage() {
   }, []);
 
   const handleStatusChange = (id: string, status: Agent["status"]) => {
-    storage.updateAgentStatus(id, status);
-    loadData();
+    startTransition(async () => {
+      await updateAgentStatus(id, status);
+      loadData();
+    });
   };
 
   const handleDeleteClick = (id: string) => {
@@ -51,29 +69,35 @@ export default function AgentsPage() {
 
   const handleDeleteConfirm = () => {
     if (agentToDelete) {
-      storage.deleteAgent(agentToDelete);
-      loadData();
-      setDeleteDialogOpen(false);
-      setAgentToDelete(null);
+      startTransition(async () => {
+        await deleteAgent(agentToDelete);
+        loadData();
+        setDeleteDialogOpen(false);
+        setAgentToDelete(null);
+      });
     }
   };
 
   const handleStartAll = () => {
-    agents.forEach((agent) => {
-      if (agent.status !== "running") {
-        storage.updateAgentStatus(agent.id, "running");
+    startTransition(async () => {
+      for (const agent of agents) {
+        if (agent.status !== "running") {
+          await updateAgentStatus(agent.id, "running");
+        }
       }
+      loadData();
     });
-    loadData();
   };
 
   const handlePauseAll = () => {
-    agents.forEach((agent) => {
-      if (agent.status === "running") {
-        storage.updateAgentStatus(agent.id, "paused");
+    startTransition(async () => {
+      for (const agent of agents) {
+        if (agent.status === "running") {
+          await updateAgentStatus(agent.id, "paused");
+        }
       }
+      loadData();
     });
-    loadData();
   };
 
   return (
