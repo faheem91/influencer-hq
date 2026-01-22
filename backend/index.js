@@ -5,6 +5,7 @@ require('dotenv').config();
 
 const config = require('./config/instagram');
 const instagramRoutes = require('./routes/instagramRoutes');
+const agentRoutes = require('./routes/agentRoutes');
 const instagramService = require('./services/instagramService');
 
 const app = express();
@@ -30,6 +31,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // Routes
 app.use('/', instagramRoutes);
+app.use('/', agentRoutes);
 
 // Homepage
 app.get('/', (req, res) => {
@@ -74,7 +76,13 @@ app.listen(PORT, async () => {
     console.log(`   GET  /api/instagram/test - Test connection`);
     console.log(`   GET  /api/instagram/search?keyword={keyword} - Search posts`);
     console.log(`   GET  /api/instagram/account - Get account info`);
-    console.log(`   POST /api/instagram/logout - Logout\n`);
+    console.log(`   POST /api/instagram/logout - Logout`);
+    console.log(`\n📝 Agent Endpoints:`);
+    console.log(`   GET  /api/agents/:id/stream - SSE real-time logs`);
+    console.log(`   POST /api/agents/:id/run - Trigger immediate run`);
+    console.log(`   POST /api/agents/:id/stop - Stop running agent`);
+    console.log(`   GET  /api/agents/:id/status - Get agent status`);
+    console.log(`   POST /api/agents/test-login - Test IMAI credentials\n`);
     
     // Initialize Instagram connection
     await initializeInstagram();

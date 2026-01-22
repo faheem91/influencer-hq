@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  influencer-agent:
+    build: .
+    container_name: influencer-hq-agent
+    ports:
+      - "4001:4000"  # Use 4001 externally to avoid conflicts with existing services
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - PORT=4000
+      - INSTAGRAM_USERNAME=${INSTAGRAM_USERNAME}
+      - INSTAGRAM_PASSWORD=${INSTAGRAM_PASSWORD}
+    volumes:
+      - ./ig_session.json:/app/ig_session.json  # Persist Instagram session
+    networks:
+      - influencer-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  influencer-network:
+    driver: bridge

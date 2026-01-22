@@ -21,7 +21,6 @@ interface ClientFormData {
     tiktok: { handle: string; hashtags: string[] };
   };
   imai: {
-    accountId: string;
     campaignId: string;
   };
   checkInterval: number;
@@ -37,7 +36,6 @@ const defaultFormData: ClientFormData = {
     tiktok: { handle: "", hashtags: [] },
   },
   imai: {
-    accountId: "",
     campaignId: "",
   },
   checkInterval: 12,
@@ -71,7 +69,6 @@ export function ClientForm({
             logo: formData.logo || null,
             description: formData.description || null,
             tracking: formData.tracking,
-            imaiAccountId: formData.imai.accountId || null,
             imaiCampaignId: formData.imai.campaignId || null,
             checkInterval: formData.checkInterval,
           });
@@ -81,7 +78,6 @@ export function ClientForm({
             logo: formData.logo || null,
             description: formData.description || null,
             tracking: formData.tracking,
-            imaiAccountId: formData.imai.accountId || null,
             imaiCampaignId: formData.imai.campaignId || null,
             checkInterval: formData.checkInterval,
           });
@@ -235,35 +231,25 @@ export function ClientForm({
           <CardTitle>IMAI Integration</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid gap-4 md:grid-cols-2">
-            <div className="space-y-2">
-              <Label htmlFor="imaiAccountId">IMAI Account ID</Label>
-              <Input
-                id="imaiAccountId"
-                value={formData.imai.accountId}
-                onChange={(e) =>
-                  setFormData((prev) => ({
-                    ...prev,
-                    imai: { ...prev.imai, accountId: e.target.value },
-                  }))
-                }
-                placeholder="Account ID from IMAI"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="imaiCampaignId">IMAI Campaign ID</Label>
-              <Input
-                id="imaiCampaignId"
-                value={formData.imai.campaignId}
-                onChange={(e) =>
-                  setFormData((prev) => ({
-                    ...prev,
-                    imai: { ...prev.imai, campaignId: e.target.value },
-                  }))
-                }
-                placeholder="Campaign ID to add creators to"
-              />
-            </div>
+          <p className="text-sm text-muted-foreground mb-4">
+            IMAI credentials are configured globally in Settings. Only the Campaign ID is needed per client.
+          </p>
+          <div className="space-y-2">
+            <Label htmlFor="imaiCampaignId">IMAI Campaign ID</Label>
+            <Input
+              id="imaiCampaignId"
+              value={formData.imai.campaignId}
+              onChange={(e) =>
+                setFormData((prev) => ({
+                  ...prev,
+                  imai: { ...prev.imai, campaignId: e.target.value },
+                }))
+              }
+              placeholder="Campaign ID to add creators to"
+            />
+            <p className="text-sm text-muted-foreground">
+              Find this in your IMAI campaign URL (e.g., imai.co/campaigns/12345)
+            </p>
           </div>
         </CardContent>
       </Card>

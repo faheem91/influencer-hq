@@ -22,8 +22,7 @@ export const clients = pgTable("clients", {
     tiktok: { handle: string; hashtags: string[] };
   }>().notNull(),
 
-  // IMAI integration
-  imaiAccountId: text("imai_account_id"),
+  // IMAI integration (credentials stored globally in settings)
   imaiCampaignId: text("imai_campaign_id"),
 
   // Agent config
@@ -81,6 +80,14 @@ export const trackedCreators = pgTable("tracked_creators", {
   engagement: jsonb("engagement").$type<{ likes: number; comments: number }>(),
 });
 
+// Settings table for global configuration (IMAI credentials, etc.)
+export const settings = pgTable("settings", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  key: text("key").notNull().unique(),
+  value: text("value").notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
 // Type exports for use in application
 export type Client = typeof clients.$inferSelect;
 export type NewClient = typeof clients.$inferInsert;
@@ -90,3 +97,5 @@ export type AgentLog = typeof agentLogs.$inferSelect;
 export type NewAgentLog = typeof agentLogs.$inferInsert;
 export type TrackedCreator = typeof trackedCreators.$inferSelect;
 export type NewTrackedCreator = typeof trackedCreators.$inferInsert;
+export type Setting = typeof settings.$inferSelect;
+export type NewSetting = typeof settings.$inferInsert;

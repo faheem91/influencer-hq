@@ -81,13 +81,48 @@ Full-featured dashboard for managing brands/clients, tracking social media menti
 
 #### 8. Settings
 - [x] Settings page (`/settings`)
-- [x] IMAI credentials configuration
+- [x] IMAI credentials configuration (now saves to database)
 - [x] Notification toggles
 - [x] Data management (export/clear)
 
 #### 9. Backend Updates
 - [x] Added pagination support to search endpoint
 - [x] Added `/api/instagram/search/all` endpoint for exports
+
+#### 10. Database Migration (Vercel Postgres + Drizzle ORM)
+- [x] Migrated from localStorage to Neon Postgres
+- [x] Created Drizzle schema for all tables
+- [x] Added settings table for global IMAI credentials
+- [x] Removed `imaiAccountId` from clients (now global)
+- [x] Full CRUD operations via server actions
+
+#### 11. Real-Time Agent Console (Claude Code Style)
+- [x] Created AgentTerminal component with dark terminal UI
+- [x] Implemented SSE (Server-Sent Events) for real-time logs
+- [x] Created useAgentStream hook for SSE connection
+- [x] Color-coded log levels (success/error/info/warning)
+- [x] Auto-scroll and connection status indicator
+
+#### 12. IMAI Playwright Automation
+- [x] Created ImaiAgentService with Playwright
+- [x] Login to IMAI (app.imai.co)
+- [x] Navigate to campaigns
+- [x] Add influencers via `.im-btn.im-btn-primary` button
+- [x] Created AgentScheduler for recurring jobs
+
+#### 13. Backend Agent API
+- [x] SSE endpoint `/api/agents/:id/stream`
+- [x] Run agent `/api/agents/:id/run`
+- [x] Stop agent `/api/agents/:id/stop`
+- [x] Agent status `/api/agents/:id/status`
+- [x] Test IMAI login `/api/agents/test-login`
+
+#### 14. Docker Deployment Setup
+- [x] Created Dockerfile with Playwright image
+- [x] Created docker-compose.yml (port 4001)
+- [x] Created nginx.conf with SSE support
+- [x] Created deploy.sh script
+- [x] Created DEPLOYMENT.md guide
 
 ---
 
@@ -111,8 +146,8 @@ client/
 │   │       └── reports/page.tsx        # Export reports
 │   ├── agents/
 │   │   ├── page.tsx                    # Agent dashboard
-│   │   └── [id]/page.tsx               # Agent detail/logs
-│   └── settings/page.tsx               # Global settings
+│   │   └── [id]/page.tsx               # Agent detail with terminal
+│   └── settings/page.tsx               # Global settings (IMAI creds)
 ├── middleware.ts                       # Clerk auth middleware
 ├── components/
 │   ├── ui/                             # ShadCN components
@@ -126,46 +161,56 @@ client/
 │   │   └── tracking-config.tsx
 │   └── agents/
 │       ├── agent-card.tsx
-│       └── agent-logs.tsx
+│       ├── agent-logs.tsx
+│       └── agent-terminal.tsx          # NEW: Claude Code style terminal
+├── db/
+│   ├── index.ts                        # Drizzle DB connection
+│   ├── schema.ts                       # Database schema
+│   └── queries.ts                      # Server actions
+├── hooks/
+│   └── useAgentStream.ts               # NEW: SSE hook for real-time logs
 ├── lib/
 │   ├── api.ts                          # Instagram API client
-│   ├── storage.ts                      # Client data persistence
-│   ├── imai-agent.ts                   # Playwright IMAI automation
 │   └── utils.ts                        # CN utility for ShadCN
-├── types/
-│   ├── client.ts
-│   ├── agent.ts
-│   └── instagram.ts
 └── .env.local.example                  # Environment template
+
+backend/
+├── index.js                            # Express app entry
+├── config/instagram.js                 # API credentials
+├── routes/
+│   ├── instagramRoutes.js              # Instagram API routes
+│   └── agentRoutes.js                  # NEW: Agent SSE & control routes
+├── services/
+│   ├── instagramService.js             # Instagram scraping
+│   ├── imaiAgentService.js             # NEW: Playwright IMAI automation
+│   └── agentScheduler.js               # NEW: Job scheduling
+├── Dockerfile                          # NEW: Docker deployment
+├── docker-compose.yml                  # NEW: Container config
+├── nginx.conf                          # NEW: Reverse proxy config
+├── deploy.sh                           # NEW: Deployment script
+└── DEPLOYMENT.md                       # NEW: Deployment guide
 ```
 
 ---
 
 ## Next Steps
 
-### Pending Tasks
-1. **Clerk Configuration**
-   - Add Clerk API keys to `.env.local`
-   - Test authentication flow
+### Completed (Previously Pending)
+- [x] Clerk Configuration - Authentication working
+- [x] Database Migration - Neon Postgres with Drizzle ORM
+- [x] IMAI Agent Implementation - Playwright automation ready
+- [x] Scheduling - node-schedule for recurring jobs
 
-2. **Database Migration**
-   - Move from localStorage to proper database
-   - Options: PostgreSQL, MongoDB, or Supabase
+### Current Deployment
+1. **Backend Deployment to VPS**
+   - Server: api.vibeguard.co (170.249.238.154)
+   - Domain: agent.influencerhq.io
+   - Port: 4001 (external)
+   - Docker with Playwright
 
-3. **IMAI Agent Implementation**
-   - Install Playwright: `npm install playwright`
-   - Analyze IMAI website structure for selectors
-   - Implement actual browser automation
-
-4. **Scheduling**
-   - Implement Vercel Cron Jobs or node-cron
-   - Configure 12-hour intervals for stories
-   - Configure 24-hour intervals for feed posts
-
-5. **Vercel Deployment**
-   - Connect `feature/dashboard` branch to Vercel
-   - Configure `panel.influencerhq.io` domain
-   - Set environment variables
+2. **Frontend Update**
+   - Update `NEXT_PUBLIC_API_URL` to `https://agent.influencerhq.io`
+   - Redeploy to Vercel
 
 ---
 
@@ -219,7 +264,19 @@ npm run dev
 | `/api/instagram/account` | GET | Get account info |
 | `/api/instagram/logout` | POST | Logout |
 
+### Backend (Agent API)
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/agents/:id/stream` | GET | SSE real-time log streaming |
+| `/api/agents/:id/run` | POST | Trigger immediate agent run |
+| `/api/agents/:id/stop` | POST | Stop running agent |
+| `/api/agents/:id/status` | GET | Get agent status |
+| `/api/agents/:id/schedule` | POST | Schedule recurring runs |
+| `/api/agents/:id/schedule` | DELETE | Cancel scheduled runs |
+| `/api/agents/scheduled` | GET | List all scheduled agents |
+| `/api/agents/test-login` | POST | Test IMAI credentials |
+
 ---
 
 ## Last Updated
-2026-01-23
+2026-01-23 (Real-time Agent Console & Docker Deployment)

@@ -4,7 +4,7 @@ import { useEffect, useState, useTransition } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { DashboardLayout } from "@/components/layout";
-import { AgentLogs } from "@/components/agents";
+import { AgentTerminal } from "@/components/agents/agent-terminal";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -14,14 +14,20 @@ import {
   getAgentLogs,
   updateAgentStatus,
   addAgentLog,
+  getImaiCredentials,
+  getCreators,
 } from "@/db/queries";
+import {
+  useAgentStream,
+  runAgentNow,
+  stopAgent,
+} from "@/hooks/useAgentStream";
 import { Agent, Client, AgentLog } from "@/db/schema";
 import {
   ArrowLeft,
   Bot,
   Play,
   Pause,
-  RefreshCw,
   Users,
   Clock,
   AlertCircle,
@@ -32,21 +38,26 @@ export default function AgentDetailPage() {
   const router = useRouter();
   const [agent, setAgent] = useState<Agent | null>(null);
   const [client, setClient] = useState<Client | null>(null);
-  const [logs, setLogs] = useState<AgentLog[]>([]);
+  const [dbLogs, setDbLogs] = useState<AgentLog[]>([]);
   const [isPending, startTransition] = useTransition();
+  const [isRunning, setIsRunning] = useState(false);
   const agentId = params.id as string;
+
+  // SSE connection for real-time logs
+  const { logs: streamLogs, isConnected, clearLogs, addLog } = useAgentStream(agentId);
 
   const loadData = () => {
     startTransition(async () => {
       const agentData = await getAgent(agentId);
       if (agentData) {
         setAgent(agentData);
+        setIsRunning(agentData.status === "running");
         const clientData = await getClient(agentData.clientId);
         if (clientData) {
           setClient(clientData);
         }
         const logsData = await getAgentLogs(agentId);
-        setLogs(logsData);
+        setDbLogs(logsData);
       } else {
         router.push("/agents");
       }
@@ -66,44 +77,143 @@ export default function AgentDetailPage() {
     }
   };
 
-  const handleManualRun = () => {
-    if (agent) {
-      startTransition(async () => {
-        // Log the manual run trigger
-        await addAgentLog(agent.id, {
-          action: "Manual run triggered",
-          result: "info",
-          details: "Agent will check for new mentions",
+  const handleRunNow = async () => {
+    if (!agent || !client) {
+      addLog({
+        timestamp: new Date().toISOString(),
+        level: "error",
+        message: "Agent or client data not loaded",
+      });
+      return;
+    }
+
+    // Get IMAI credentials
+    const credentials = await getImaiCredentials();
+    if (!credentials) {
+      addLog({
+        timestamp: new Date().toISOString(),
+        level: "error",
+        message: "IMAI credentials not configured. Go to Settings to add them.",
+      });
+      return;
+    }
+
+    if (!client.imaiCampaignId) {
+      addLog({
+        timestamp: new Date().toISOString(),
+        level: "error",
+        message: "Client does not have an IMAI Campaign ID configured.",
+      });
+      return;
+    }
+
+    // Get creators to add
+    const creators = await getCreators(client.id);
+    const creatorsToAdd = creators.filter((c) => !c.addedToImai);
+
+    if (creatorsToAdd.length === 0) {
+      addLog({
+        timestamp: new Date().toISOString(),
+        level: "info",
+        message: "No new creators to add. All tracked creators have already been added to IMAI.",
+      });
+      return;
+    }
+
+    setIsRunning(true);
+    await handleStatusChange("running");
+
+    // Log the start locally
+    addLog({
+      timestamp: new Date().toISOString(),
+      level: "info",
+      message: `Starting agent run with ${creatorsToAdd.length} creators...`,
+    });
+
+    try {
+      const result = await runAgentNow(agentId, {
+        client: {
+          id: client.id,
+          name: client.name,
+          imaiCampaignId: client.imaiCampaignId,
+        },
+        imaiCredentials: credentials,
+        creators: creatorsToAdd.map((c) => ({ username: c.username })),
+      });
+
+      if (result.success) {
+        addLog({
+          timestamp: new Date().toISOString(),
+          level: "success",
+          message: "Agent run completed successfully",
+          details: result.result,
         });
-        await updateAgentStatus(agent.id, "running");
 
-        // Simulate some work (in a real app, this would trigger actual agent work)
-        setTimeout(async () => {
-          await addAgentLog(agent.id, {
-            action: "Checking Instagram mentions",
-            result: "success",
-            details: `Searched for @${client?.tracking?.instagram?.handle || "handle"}`,
-          });
-          loadData();
-        }, 1000);
+        // Log to database
+        await addAgentLog(agent.id, {
+          action: "Agent run completed",
+          result: "success",
+          details: JSON.stringify(result.result),
+        });
+      } else {
+        addLog({
+          timestamp: new Date().toISOString(),
+          level: "error",
+          message: `Agent run failed: ${result.error}`,
+        });
 
-        setTimeout(async () => {
-          await addAgentLog(agent.id, {
-            action: "Checking hashtags",
-            result: "success",
-            details: `Searched ${
-              (client?.tracking?.instagram?.hashtags?.length || 0) +
-              (client?.tracking?.facebook?.hashtags?.length || 0) +
-              (client?.tracking?.tiktok?.hashtags?.length || 0)
-            } hashtags`,
-          });
-          await updateAgentStatus(agent.id, "idle");
-          loadData();
-        }, 2000);
+        await addAgentLog(agent.id, {
+          action: "Agent run failed",
+          result: "error",
+          details: result.error,
+        });
+      }
+    } catch (error) {
+      addLog({
+        timestamp: new Date().toISOString(),
+        level: "error",
+        message: `Agent run error: ${error instanceof Error ? error.message : "Unknown error"}`,
+      });
+    } finally {
+      setIsRunning(false);
+      await handleStatusChange("idle");
+      loadData();
+    }
+  };
 
-        loadData();
+  const handleStop = async () => {
+    if (!agent) return;
+
+    addLog({
+      timestamp: new Date().toISOString(),
+      level: "warning",
+      message: "Stopping agent...",
+    });
+
+    try {
+      await stopAgent(agentId);
+      await handleStatusChange("idle");
+      setIsRunning(false);
+
+      addLog({
+        timestamp: new Date().toISOString(),
+        level: "info",
+        message: "Agent stopped",
+      });
+
+      await addAgentLog(agent.id, {
+        action: "Agent manually stopped",
+        result: "info",
+      });
+    } catch (error) {
+      addLog({
+        timestamp: new Date().toISOString(),
+        level: "error",
+        message: `Failed to stop agent: ${error instanceof Error ? error.message : "Unknown error"}`,
       });
     }
+
+    loadData();
   };
 
   if (!agent) {
@@ -123,19 +233,18 @@ export default function AgentDetailPage() {
     }
   };
 
-  // Convert logs to the format expected by AgentLogs component
-  const formattedLogs = logs.map((log) => ({
-    id: log.id,
-    timestamp: log.timestamp.toISOString(),
-    action: log.action,
-    result: log.result,
-    details: log.details || undefined,
-  }));
+  // Calculate next run time based on last run and interval
+  const getNextRunTime = () => {
+    if (!agent.lastRun || !client?.checkInterval) return undefined;
+    const lastRun = new Date(agent.lastRun);
+    const nextRun = new Date(lastRun.getTime() + client.checkInterval * 60 * 60 * 1000);
+    return nextRun.toISOString();
+  };
 
   return (
     <DashboardLayout
       title={`Agent - ${agent.clientName}`}
-      description="Agent details and logs"
+      description="Agent details and real-time console"
     >
       <div className="space-y-6">
         {/* Header */}
@@ -147,11 +256,7 @@ export default function AgentDetailPage() {
             </Link>
           </Button>
           <div className="flex gap-2">
-            <Button variant="outline" onClick={handleManualRun}>
-              <RefreshCw className="mr-2 h-4 w-4" />
-              Run Now
-            </Button>
-            {agent.status === "running" ? (
+            {isRunning ? (
               <Button
                 variant="secondary"
                 onClick={() => handleStatusChange("paused")}
@@ -167,6 +272,18 @@ export default function AgentDetailPage() {
             )}
           </div>
         </div>
+
+        {/* Agent Terminal Console */}
+        <AgentTerminal
+          agentId={agentId}
+          clientName={agent.clientName}
+          status={isRunning ? "running" : agent.status}
+          nextRun={getNextRunTime()}
+          onRunNow={handleRunNow}
+          onStop={handleStop}
+          logs={streamLogs}
+          isConnected={isConnected}
+        />
 
         {/* Agent Info */}
         <div className="grid gap-6 lg:grid-cols-3">
@@ -192,9 +309,11 @@ export default function AgentDetailPage() {
                 </div>
                 <div>
                   <p className="text-sm font-medium text-muted-foreground">
-                    Created
+                    IMAI Campaign ID
                   </p>
-                  <p>{new Date(agent.createdAt).toLocaleDateString()}</p>
+                  <p className="font-mono text-sm">
+                    {client?.imaiCampaignId || "Not configured"}
+                  </p>
                 </div>
                 <div>
                   <p className="text-sm font-medium text-muted-foreground">
@@ -240,7 +359,7 @@ export default function AgentDetailPage() {
                   <span>Total Runs</span>
                 </div>
                 <span className="text-xl font-bold">
-                  {logs.filter((l) => l.action.includes("run")).length}
+                  {dbLogs.filter((l) => l.action.includes("run")).length}
                 </span>
               </div>
               <div className="flex items-center justify-between">
@@ -255,19 +374,6 @@ export default function AgentDetailPage() {
             </CardContent>
           </Card>
         </div>
-
-        {/* Logs */}
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle>Activity Logs</CardTitle>
-            <p className="text-sm text-muted-foreground">
-              {logs.length} entries
-            </p>
-          </CardHeader>
-          <CardContent>
-            <AgentLogs logs={formattedLogs} />
-          </CardContent>
-        </Card>
 
         {/* Quick Links */}
         <Card>
@@ -292,6 +398,9 @@ export default function AgentDetailPage() {
                 <Link href={`/clients/${agent.clientId}/edit`}>
                   Edit Tracking Config
                 </Link>
+              </Button>
+              <Button variant="outline" onClick={clearLogs}>
+                Clear Console
               </Button>
             </div>
           </CardContent>

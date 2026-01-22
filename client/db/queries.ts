@@ -6,12 +6,14 @@ import {
   agents,
   agentLogs,
   trackedCreators,
+  settings,
   Client,
   NewClient,
   Agent,
   NewAgent,
   AgentLog,
   TrackedCreator,
+  Setting,
 } from "./schema";
 import { eq, desc, count } from "drizzle-orm";
 
@@ -249,4 +251,50 @@ export async function exportCreatorsCSV(clientId?: string): Promise<string> {
   return [headers.join(","), ...rows.map((r) => r.map((v) => `"${v}"`).join(","))].join(
     "\n"
   );
+}
+
+// ============= Settings Operations =============
+
+export async function getSetting(key: string): Promise<string | null> {
+  const result = await db.select().from(settings).where(eq(settings.key, key));
+  return result[0]?.value ?? null;
+}
+
+export async function setSetting(key: string, value: string): Promise<Setting> {
+  // Try to update existing setting, or insert new one
+  const existing = await db.select().from(settings).where(eq(settings.key, key));
+
+  if (existing.length > 0) {
+    const result = await db
+      .update(settings)
+      .set({ value, updatedAt: new Date() })
+      .where(eq(settings.key, key))
+      .returning();
+    return result[0];
+  } else {
+    const result = await db
+      .insert(settings)
+      .values({ key, value })
+      .returning();
+    return result[0];
+  }
+}
+
+export async function getSettings(): Promise<Setting[]> {
+  return db.select().from(settings);
+}
+
+export async function getImaiCredentials(): Promise<{ email: string; password: string } | null> {
+  const email = await getSetting("imai_email");
+  const password = await getSetting("imai_password");
+
+  if (email && password) {
+    return { email, password };
+  }
+  return null;
+}
+
+export async function setImaiCredentials(email: string, password: string): Promise<void> {
+  await setSetting("imai_email", email);
+  await setSetting("imai_password", password);
 }

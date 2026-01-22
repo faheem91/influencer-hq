@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState, useTransition, useEffect } from "react";
 import { DashboardLayout } from "@/components/layout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,15 +8,57 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
-import { getClients, getAgents, getCreators } from "@/db/queries";
-import { Download, Upload, Trash2, Key, Bell, Database } from "lucide-react";
+import { getClients, getAgents, getCreators, getImaiCredentials, setImaiCredentials } from "@/db/queries";
+import { Download, Upload, Trash2, Key, Bell, Database, Check, Loader2 } from "lucide-react";
 
 export default function SettingsPage() {
-  const [imaiEmail, setImaiEmail] = useState("isabel@outsmartlabs.com");
+  const [imaiEmail, setImaiEmail] = useState("");
   const [imaiPassword, setImaiPassword] = useState("");
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [autoRunEnabled, setAutoRunEnabled] = useState(true);
   const [isPending, startTransition] = useTransition();
+  const [isSavingCredentials, setIsSavingCredentials] = useState(false);
+  const [credentialsSaved, setCredentialsSaved] = useState(false);
+  const [isLoadingCredentials, setIsLoadingCredentials] = useState(true);
+
+  // Load IMAI credentials on mount
+  useEffect(() => {
+    const loadCredentials = async () => {
+      try {
+        const credentials = await getImaiCredentials();
+        if (credentials) {
+          setImaiEmail(credentials.email);
+          setImaiPassword(credentials.password);
+        }
+      } catch (error) {
+        console.error("Error loading IMAI credentials:", error);
+      } finally {
+        setIsLoadingCredentials(false);
+      }
+    };
+    loadCredentials();
+  }, []);
+
+  const handleSaveCredentials = async () => {
+    if (!imaiEmail || !imaiPassword) {
+      alert("Please enter both email and password");
+      return;
+    }
+
+    setIsSavingCredentials(true);
+    setCredentialsSaved(false);
+
+    try {
+      await setImaiCredentials(imaiEmail, imaiPassword);
+      setCredentialsSaved(true);
+      setTimeout(() => setCredentialsSaved(false), 3000);
+    } catch (error) {
+      console.error("Error saving IMAI credentials:", error);
+      alert("Failed to save credentials. Please try again.");
+    } finally {
+      setIsSavingCredentials(false);
+    }
+  };
 
   const handleExportAll = async () => {
     startTransition(async () => {
@@ -66,31 +108,58 @@ export default function SettingsPage() {
               <CardTitle>IMAI Credentials</CardTitle>
             </div>
             <CardDescription>
-              Master IMAI account credentials used for automation
+              Master IMAI account credentials used for automation. These credentials are used by all agents to log into IMAI and add influencers.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="imaiEmail">IMAI Email</Label>
-              <Input
-                id="imaiEmail"
-                type="email"
-                value={imaiEmail}
-                onChange={(e) => setImaiEmail(e.target.value)}
-                placeholder="email@example.com"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="imaiPassword">IMAI Password</Label>
-              <Input
-                id="imaiPassword"
-                type="password"
-                value={imaiPassword}
-                onChange={(e) => setImaiPassword(e.target.value)}
-                placeholder="••••••••"
-              />
-            </div>
-            <Button>Save Credentials</Button>
+            {isLoadingCredentials ? (
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading credentials...
+              </div>
+            ) : (
+              <>
+                <div className="space-y-2">
+                  <Label htmlFor="imaiEmail">IMAI Email</Label>
+                  <Input
+                    id="imaiEmail"
+                    type="email"
+                    value={imaiEmail}
+                    onChange={(e) => setImaiEmail(e.target.value)}
+                    placeholder="email@example.com"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="imaiPassword">IMAI Password</Label>
+                  <Input
+                    id="imaiPassword"
+                    type="password"
+                    value={imaiPassword}
+                    onChange={(e) => setImaiPassword(e.target.value)}
+                    placeholder="••••••••"
+                  />
+                </div>
+                <Button
+                  onClick={handleSaveCredentials}
+                  disabled={isSavingCredentials}
+                  className={credentialsSaved ? "bg-green-600 hover:bg-green-600" : ""}
+                >
+                  {isSavingCredentials ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Saving...
+                    </>
+                  ) : credentialsSaved ? (
+                    <>
+                      <Check className="mr-2 h-4 w-4" />
+                      Saved!
+                    </>
+                  ) : (
+                    "Save Credentials"
+                  )}
+                </Button>
+              </>
+            )}
           </CardContent>
         </Card>
 
