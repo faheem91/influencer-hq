@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Agent } from "@/types";
+import { Agent } from "@/db/schema";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -24,11 +24,12 @@ import {
 
 interface AgentCardProps {
   agent: Agent;
+  logsCount?: number;
   onStatusChange: (id: string, status: Agent["status"]) => void;
   onDelete: (id: string) => void;
 }
 
-export function AgentCard({ agent, onStatusChange, onDelete }: AgentCardProps) {
+export function AgentCard({ agent, logsCount = 0, onStatusChange, onDelete }: AgentCardProps) {
   const getStatusColor = (status: Agent["status"]) => {
     switch (status) {
       case "running":
@@ -134,7 +135,7 @@ export function AgentCard({ agent, onStatusChange, onDelete }: AgentCardProps) {
           </div>
           <div>
             <p className="text-sm text-muted-foreground">Logs</p>
-            <p className="text-sm">{agent.logs.length} entries</p>
+            <p className="text-sm">{logsCount} entries</p>
           </div>
         </div>
 

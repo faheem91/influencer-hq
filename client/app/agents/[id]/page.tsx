@@ -125,6 +125,7 @@ export default function AgentDetailPage() {
 
   // Convert logs to the format expected by AgentLogs component
   const formattedLogs = logs.map((log) => ({
+    id: log.id,
     timestamp: log.timestamp.toISOString(),
     action: log.action,
     result: log.result,

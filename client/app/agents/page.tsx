@@ -13,7 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { getAgents, getAgentStats, updateAgentStatus, deleteAgent } from "@/db/queries";
+import { getAgents, getAgentStats, getAgentLogCounts, updateAgentStatus, deleteAgent } from "@/db/queries";
 import { Agent } from "@/db/schema";
 import { Bot, Play, Pause, AlertCircle, CheckCircle } from "lucide-react";
 
@@ -28,6 +28,7 @@ interface AgentStats {
 
 export default function AgentsPage() {
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [logCounts, setLogCounts] = useState<Record<string, number>>({});
   const [stats, setStats] = useState<AgentStats>({
     totalAgents: 0,
     runningAgents: 0,
@@ -42,12 +43,14 @@ export default function AgentsPage() {
 
   const loadData = () => {
     startTransition(async () => {
-      const [agentsData, statsData] = await Promise.all([
+      const [agentsData, statsData, logCountsData] = await Promise.all([
         getAgents(),
         getAgentStats(),
+        getAgentLogCounts(),
       ]);
       setAgents(agentsData);
       setStats(statsData);
+      setLogCounts(logCountsData);
     });
   };
 
@@ -199,6 +202,7 @@ export default function AgentsPage() {
               <AgentCard
                 key={agent.id}
                 agent={agent}
+                logsCount={logCounts[agent.id] || 0}
                 onStatusChange={handleStatusChange}
                 onDelete={handleDeleteClick}
               />

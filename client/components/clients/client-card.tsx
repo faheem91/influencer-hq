@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Client } from "@/types";
+import { Client } from "@/db/schema";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";

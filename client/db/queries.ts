@@ -13,7 +13,7 @@ import {
   AgentLog,
   TrackedCreator,
 } from "./schema";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, count } from "drizzle-orm";
 
 // ============= Client Operations =============
 
@@ -162,6 +162,21 @@ export async function addAgentLog(
     .values({ agentId, ...data })
     .returning();
   return result[0];
+}
+
+export async function getAgentLogCounts(): Promise<Record<string, number>> {
+  const result = await db
+    .select({
+      agentId: agentLogs.agentId,
+      count: count(),
+    })
+    .from(agentLogs)
+    .groupBy(agentLogs.agentId);
+
+  return result.reduce((acc, row) => {
+    acc[row.agentId] = row.count;
+    return acc;
+  }, {} as Record<string, number>);
 }
 
 // ============= Tracked Creator Operations =============
