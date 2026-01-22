@@ -55,7 +55,6 @@ export default function EditClientPage() {
       tiktok: { handle: "", hashtags: [] },
     },
     imai: {
-      accountId: client.imaiAccountId || "",
       campaignId: client.imaiCampaignId || "",
     },
     checkInterval: client.checkInterval,

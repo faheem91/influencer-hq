@@ -438,12 +438,6 @@ export default function ClientDetailPage() {
                 <div className="grid gap-4 md:grid-cols-2">
                   <div>
                     <p className="text-sm font-medium text-muted-foreground">
-                      Account ID
-                    </p>
-                    <p>{client.imaiAccountId || "Not configured"}</p>
-                  </div>
-                  <div>
-                    <p className="text-sm font-medium text-muted-foreground">
                       Campaign ID
                     </p>
                     <p>{client.imaiCampaignId || "Not configured"}</p>
