@@ -146,7 +146,7 @@ export default function AgentDetailPage() {
           timestamp: new Date().toISOString(),
           level: "success",
           message: "Agent run completed successfully",
-          details: result.result,
+          details: result.result as Record<string, unknown> | undefined,
         });
 
         // Log to database
