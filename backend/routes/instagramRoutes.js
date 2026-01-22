@@ -6,9 +6,13 @@ const instagramController = require('../controllers/instagramController');
  * Instagram API Routes
  */
 
-// Search posts by keyword (hashtag or mention)
-// Example: GET /api/instagram/search?keyword=avneetkaur_13
+// Search posts by keyword with pagination (hashtag or mention)
+// Example: GET /api/instagram/search?keyword=avneetkaur_13&page=1&limit=10
 router.get('/api/instagram/search', instagramController.searchPosts);
+
+// Search posts - return all results (for export)
+// Example: GET /api/instagram/search/all?keyword=avneetkaur_13
+router.get('/api/instagram/search/all', instagramController.searchPostsAll);
 
 // Test Instagram connection
 // Example: GET /api/instagram/test

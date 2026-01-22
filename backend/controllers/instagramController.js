@@ -1,23 +1,26 @@
 const instagramService = require('../services/instagramService');
 
 /**
- * Search Instagram posts by keyword (hashtag or mention)
- * GET /api/instagram/search?keyword={keyword}
+ * Search Instagram posts by keyword (hashtag or mention) with pagination
+ * GET /api/instagram/search?keyword={keyword}&page={page}&limit={limit}
  */
 exports.searchPosts = async (req, res) => {
     try {
-        const { keyword } = req.query;
+        const { keyword, page = 1, limit = 10 } = req.query;
 
         // Validate keyword parameter
         if (!keyword) {
             return res.status(400).json({
                 success: false,
                 error: 'Keyword parameter is required',
-                usage: 'GET /api/instagram/search?keyword=avneetkaur_13',
+                usage: 'GET /api/instagram/search?keyword=avneetkaur_13&page=1&limit=10',
             });
         }
 
-        console.log(`\n📡 API Request: Search for "${keyword}"`);
+        const pageNum = parseInt(page, 10) || 1;
+        const limitNum = parseInt(limit, 10) || 10;
+
+        console.log(`\n📡 API Request: Search for "${keyword}" (page ${pageNum}, limit ${limitNum})`);
 
         // Search for posts
         const results = await instagramService.searchByKeyword(keyword);
@@ -25,23 +28,34 @@ exports.searchPosts = async (req, res) => {
         // Combine all posts
         const allPosts = [...results.hashtagPosts, ...results.mentionPosts];
 
+        // Apply pagination
+        const startIndex = (pageNum - 1) * limitNum;
+        const endIndex = startIndex + limitNum;
+        const paginatedPosts = allPosts.slice(startIndex, endIndex);
+        const totalPosts = allPosts.length;
+        const totalPages = Math.ceil(totalPosts / limitNum);
+
         // Response
         return res.status(200).json({
             success: true,
             data: {
                 keyword: results.keyword,
-                totalPosts: results.totalPosts,
+                totalPosts,
+                page: pageNum,
+                limit: limitNum,
+                totalPages,
+                hasMore: pageNum < totalPages,
+                posts: paginatedPosts,
                 hashtagResults: {
                     count: results.hashtagPosts.length,
-                    posts: results.hashtagPosts,
+                    posts: results.hashtagPosts.slice(startIndex, endIndex),
                 },
                 mentionResults: {
                     count: results.mentionPosts.length,
-                    posts: results.mentionPosts,
+                    posts: results.mentionPosts.slice(startIndex, endIndex),
                 },
-                allPosts,
             },
-            message: `Found ${results.totalPosts} posts for keyword "${keyword}"`,
+            message: `Found ${totalPosts} posts for keyword "${keyword}" (showing ${paginatedPosts.length})`,
         });
     } catch (error) {
         console.error('❌ Search API Error:', error.message);
@@ -147,17 +161,63 @@ exports.getAccountInfo = async (req, res) => {
 exports.logout = async (req, res) => {
     try {
         await instagramService.logout();
-        
+
         return res.status(200).json({
             success: true,
             message: 'Logged out successfully',
         });
     } catch (error) {
         console.error('❌ Logout error:', error.message);
-        
+
         return res.status(500).json({
             success: false,
             error: 'Logout failed',
+            message: error.message,
+        });
+    }
+};
+
+/**
+ * Search Instagram posts - return all results (for export)
+ * GET /api/instagram/search/all?keyword={keyword}
+ */
+exports.searchPostsAll = async (req, res) => {
+    try {
+        const { keyword } = req.query;
+
+        // Validate keyword parameter
+        if (!keyword) {
+            return res.status(400).json({
+                success: false,
+                error: 'Keyword parameter is required',
+                usage: 'GET /api/instagram/search/all?keyword=avneetkaur_13',
+            });
+        }
+
+        console.log(`\n📡 API Request: Search ALL for "${keyword}"`);
+
+        // Search for posts
+        const results = await instagramService.searchByKeyword(keyword);
+
+        // Combine all posts
+        const allPosts = [...results.hashtagPosts, ...results.mentionPosts];
+
+        // Response with all posts (no pagination)
+        return res.status(200).json({
+            success: true,
+            data: {
+                keyword: results.keyword,
+                totalPosts: allPosts.length,
+                posts: allPosts,
+            },
+            message: `Found ${allPosts.length} posts for keyword "${keyword}"`,
+        });
+    } catch (error) {
+        console.error('❌ Search All API Error:', error.message);
+
+        return res.status(500).json({
+            success: false,
+            error: 'Search failed',
             message: error.message,
         });
     }
