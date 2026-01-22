@@ -2,28 +2,43 @@ const axios = require('axios');
 
 class InstagramGraphService {
   constructor() {
-    this.baseUrl = 'https://graph.facebook.com/v18.0';
     this.accessToken = process.env.INSTAGRAM_ACCESS_TOKEN;
     this.appId = process.env.INSTAGRAM_APP_ID;
     this.appSecret = process.env.INSTAGRAM_APP_SECRET;
-    this.userId = null; // Will be fetched on init
+    this.userId = null;
+    this.username = null;
     this.isInitialized = false;
+    this.apiType = null; // 'basic' or 'business'
+
+    // Determine API type based on token prefix
+    // IGA tokens = Basic Display API, EAA tokens = Business/Graph API
+    if (this.accessToken?.startsWith('IGA')) {
+      this.baseUrl = 'https://graph.instagram.com';
+      this.apiType = 'basic';
+    } else {
+      this.baseUrl = 'https://graph.facebook.com/v18.0';
+      this.apiType = 'business';
+    }
   }
 
   async initialize() {
     if (this.isInitialized) return true;
 
     try {
-      console.log('🔄 Initializing Instagram Graph API...');
+      console.log(`🔄 Initializing Instagram ${this.apiType === 'basic' ? 'Basic Display' : 'Graph'} API...`);
 
       if (!this.accessToken) {
         throw new Error('INSTAGRAM_ACCESS_TOKEN not configured');
       }
 
-      // Get the Instagram Business Account ID
+      // Fields differ based on API type
+      const fields = this.apiType === 'basic'
+        ? 'id,username,media_count'
+        : 'id,username,account_type,media_count';
+
       const response = await axios.get(`${this.baseUrl}/me`, {
         params: {
-          fields: 'id,username,account_type,media_count',
+          fields,
           access_token: this.accessToken
         }
       });
@@ -32,14 +47,16 @@ class InstagramGraphService {
       this.username = response.data.username;
       this.isInitialized = true;
 
-      console.log(`✅ Instagram Graph API initialized`);
+      console.log(`✅ Instagram ${this.apiType === 'basic' ? 'Basic Display' : 'Graph'} API initialized`);
       console.log(`   Account: @${this.username} (ID: ${this.userId})`);
-      console.log(`   Type: ${response.data.account_type}`);
+      if (response.data.account_type) {
+        console.log(`   Type: ${response.data.account_type}`);
+      }
       console.log(`   Media Count: ${response.data.media_count}`);
 
       return true;
     } catch (error) {
-      console.error('❌ Instagram Graph API initialization failed:', error.response?.data || error.message);
+      console.error('❌ Instagram API initialization failed:', error.response?.data || error.message);
       throw error;
     }
   }
@@ -47,9 +64,15 @@ class InstagramGraphService {
   async getAccountInfo() {
     await this.initialize();
 
+    // Fields differ based on API type
+    // Basic Display API has limited fields
+    const fields = this.apiType === 'basic'
+      ? 'id,username,media_count'
+      : 'id,username,account_type,media_count,profile_picture_url,biography,website,followers_count,follows_count';
+
     const response = await axios.get(`${this.baseUrl}/me`, {
       params: {
-        fields: 'id,username,account_type,media_count,profile_picture_url,biography,website,followers_count,follows_count',
+        fields,
         access_token: this.accessToken
       }
     });
@@ -60,13 +83,21 @@ class InstagramGraphService {
   async searchHashtag(hashtag) {
     await this.initialize();
 
+    // Basic Display API doesn't support hashtag search
+    if (this.apiType === 'basic') {
+      console.log(`⚠️  Hashtag search not available with Basic Display API`);
+      console.log(`   Returning own media instead. For hashtag search, use a Business account token.`);
+      // Return own media as fallback
+      return this.getOwnMedia();
+    }
+
     try {
       // Remove # if present
       const cleanHashtag = hashtag.replace(/^#/, '');
       console.log(`🔍 Searching hashtag: #${cleanHashtag}`);
 
-      // Step 1: Get hashtag ID
-      const hashtagSearchResponse = await axios.get(`${this.baseUrl}/ig_hashtag_search`, {
+      // Step 1: Get hashtag ID (Business Graph API only)
+      const hashtagSearchResponse = await axios.get(`https://graph.facebook.com/v18.0/ig_hashtag_search`, {
         params: {
           user_id: this.userId,
           q: cleanHashtag,
@@ -83,7 +114,7 @@ class InstagramGraphService {
       console.log(`   Found hashtag ID: ${hashtagId}`);
 
       // Step 2: Get recent media for this hashtag
-      const mediaResponse = await axios.get(`${this.baseUrl}/${hashtagId}/recent_media`, {
+      const mediaResponse = await axios.get(`https://graph.facebook.com/v18.0/${hashtagId}/recent_media`, {
         params: {
           user_id: this.userId,
           fields: 'id,caption,media_type,media_url,permalink,timestamp,username,like_count,comments_count',
@@ -103,6 +134,29 @@ class InstagramGraphService {
         console.log('   Note: Hashtag search limit reached (30 unique hashtags per 7 days)');
       }
 
+      throw error;
+    }
+  }
+
+  async getOwnMedia() {
+    await this.initialize();
+
+    try {
+      console.log(`🔍 Getting own media...`);
+
+      const response = await axios.get(`${this.baseUrl}/me/media`, {
+        params: {
+          fields: 'id,caption,media_type,media_url,permalink,timestamp,thumbnail_url',
+          access_token: this.accessToken
+        }
+      });
+
+      const posts = response.data.data || [];
+      console.log(`   Found ${posts.length} posts`);
+
+      return posts.map(post => this.formatPost(post, 'own'));
+    } catch (error) {
+      console.error(`❌ Own media fetch failed:`, error.response?.data || error.message);
       throw error;
     }
   }
