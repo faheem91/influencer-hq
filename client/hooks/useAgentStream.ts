@@ -2,11 +2,11 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 
-interface TerminalLog {
+export interface TerminalLog {
   timestamp: string;
   level: "info" | "success" | "error" | "warning";
   message: string;
-  details?: unknown;
+  details?: string | Record<string, unknown>;
 }
 
 interface SSEMessage {

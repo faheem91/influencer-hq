@@ -6,13 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Play, Square, Terminal, Clock, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
-
-interface TerminalLog {
-  timestamp: string;
-  level: "info" | "success" | "error" | "warning";
-  message: string;
-  details?: string | Record<string, unknown>;
-}
+import { TerminalLog } from "@/hooks/useAgentStream";
 
 interface AgentTerminalProps {
   agentId: string;
