@@ -31,28 +31,85 @@ class InstagramGraphService {
         throw new Error('INSTAGRAM_ACCESS_TOKEN not configured');
       }
 
-      // Fields differ based on API type
-      const fields = this.apiType === 'basic'
-        ? 'id,username,media_count'
-        : 'id,username,account_type,media_count';
+      if (this.apiType === 'basic') {
+        // Basic Display API - use Instagram endpoint
+        const response = await axios.get(`${this.baseUrl}/me`, {
+          params: {
+            fields: 'id,username,media_count',
+            access_token: this.accessToken
+          }
+        });
 
-      const response = await axios.get(`${this.baseUrl}/me`, {
-        params: {
-          fields,
-          access_token: this.accessToken
+        this.userId = response.data.id;
+        this.username = response.data.username;
+        this.isInitialized = true;
+
+        console.log(`✅ Instagram Basic Display API initialized`);
+        console.log(`   Account: @${this.username} (ID: ${this.userId})`);
+        console.log(`   Media Count: ${response.data.media_count}`);
+      } else {
+        // Business Graph API - need to find Instagram Business Account via Facebook Pages
+        console.log(`   Looking for Instagram Business Account via Facebook Pages...`);
+
+        // First get Facebook Pages the token has access to
+        const pagesResponse = await axios.get(`${this.baseUrl}/me/accounts`, {
+          params: {
+            access_token: this.accessToken
+          }
+        });
+
+        if (!pagesResponse.data.data || pagesResponse.data.data.length === 0) {
+          throw new Error('No Facebook Pages found. Make sure your token has access to a Facebook Page connected to Instagram.');
         }
-      });
 
-      this.userId = response.data.id;
-      this.username = response.data.username;
-      this.isInitialized = true;
+        // Find a page with Instagram Business Account
+        let instagramAccountId = null;
+        let pageAccessToken = null;
 
-      console.log(`✅ Instagram ${this.apiType === 'basic' ? 'Basic Display' : 'Graph'} API initialized`);
-      console.log(`   Account: @${this.username} (ID: ${this.userId})`);
-      if (response.data.account_type) {
-        console.log(`   Type: ${response.data.account_type}`);
+        for (const page of pagesResponse.data.data) {
+          console.log(`   Checking page: ${page.name} (${page.id})`);
+
+          try {
+            const igResponse = await axios.get(`${this.baseUrl}/${page.id}`, {
+              params: {
+                fields: 'instagram_business_account',
+                access_token: page.access_token || this.accessToken
+              }
+            });
+
+            if (igResponse.data.instagram_business_account) {
+              instagramAccountId = igResponse.data.instagram_business_account.id;
+              pageAccessToken = page.access_token || this.accessToken;
+              console.log(`   ✅ Found Instagram Business Account: ${instagramAccountId}`);
+              break;
+            }
+          } catch (e) {
+            console.log(`   Page ${page.name} has no Instagram Business Account`);
+          }
+        }
+
+        if (!instagramAccountId) {
+          throw new Error('No Instagram Business Account found connected to any Facebook Page.');
+        }
+
+        // Get Instagram account details
+        const igAccountResponse = await axios.get(`${this.baseUrl}/${instagramAccountId}`, {
+          params: {
+            fields: 'id,username,profile_picture_url,followers_count,media_count',
+            access_token: pageAccessToken
+          }
+        });
+
+        this.userId = igAccountResponse.data.id;
+        this.username = igAccountResponse.data.username;
+        this.pageAccessToken = pageAccessToken; // Store for API calls
+        this.isInitialized = true;
+
+        console.log(`✅ Instagram Graph API initialized`);
+        console.log(`   Account: @${this.username} (ID: ${this.userId})`);
+        console.log(`   Followers: ${igAccountResponse.data.followers_count || 'N/A'}`);
+        console.log(`   Media Count: ${igAccountResponse.data.media_count || 'N/A'}`);
       }
-      console.log(`   Media Count: ${response.data.media_count}`);
 
       return true;
     } catch (error) {
@@ -96,12 +153,15 @@ class InstagramGraphService {
       const cleanHashtag = hashtag.replace(/^#/, '');
       console.log(`🔍 Searching hashtag: #${cleanHashtag}`);
 
+      // Use page access token for Business API calls
+      const token = this.pageAccessToken || this.accessToken;
+
       // Step 1: Get hashtag ID (Business Graph API only)
       const hashtagSearchResponse = await axios.get(`https://graph.facebook.com/v18.0/ig_hashtag_search`, {
         params: {
           user_id: this.userId,
           q: cleanHashtag,
-          access_token: this.accessToken
+          access_token: token
         }
       });
 
@@ -118,7 +178,7 @@ class InstagramGraphService {
         params: {
           user_id: this.userId,
           fields: 'id,caption,media_type,media_url,permalink,timestamp,username,like_count,comments_count',
-          access_token: this.accessToken
+          access_token: token
         }
       });
 
