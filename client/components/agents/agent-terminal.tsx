@@ -11,7 +11,7 @@ interface TerminalLog {
   timestamp: string;
   level: "info" | "success" | "error" | "warning";
   message: string;
-  details?: unknown;
+  details?: string | Record<string, unknown>;
 }
 
 interface AgentTerminalProps {
@@ -201,8 +201,8 @@ export function AgentTerminal({
                   {log.details && (
                     <span className="text-zinc-500">
                       {typeof log.details === "string"
-                        ? log.details
-                        : JSON.stringify(log.details)}
+                        ? ` ${log.details}`
+                        : ` ${JSON.stringify(log.details)}`}
                     </span>
                   )}
                 </div>
