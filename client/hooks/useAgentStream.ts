@@ -14,7 +14,7 @@ interface SSEMessage {
   timestamp?: string;
   level?: "info" | "success" | "error" | "warning";
   message?: string;
-  details?: unknown;
+  details?: string | Record<string, unknown>;
   status?: "starting" | "completed" | "error" | "stopped";
   error?: string;
   result?: unknown;
