@@ -307,11 +307,11 @@ export default function AgentDetailPage() {
                     {agent.status}
                   </Badge>
                 </div>
-                <div>
+                <div className="min-w-0">
                   <p className="text-sm font-medium text-muted-foreground">
                     IMAI Campaign ID
                   </p>
-                  <p className="font-mono text-sm">
+                  <p className="font-mono text-sm truncate" title={client?.imaiCampaignId || "Not configured"}>
                     {client?.imaiCampaignId || "Not configured"}
                   </p>
                 </div>
