@@ -279,6 +279,15 @@ Respond in JSON format:
       const campaignUrl = `https://imai.co/campaigns/influencers/${campaignId}`;
       await this.page.goto(campaignUrl, { waitUntil: 'networkidle', timeout: 60000 });
 
+      // Check URL immediately - if redirected to login, we need to re-auth
+      const currentUrl = this.page.url();
+      this.log('info', `📍 Post-navigation URL: ${currentUrl}`);
+
+      if (currentUrl.includes('/login') || currentUrl.includes('/signin')) {
+        this.log('warning', '⚠️ Redirected to login after navigation! Session expired.');
+        throw new Error('Session expired - redirected to login');
+      }
+
       // AI verification
       const navCheck = await this.waitForStateWithAI(
         'Verifying campaign page loaded',
@@ -303,6 +312,7 @@ Respond in JSON format:
    */
   async ensureLoggedIn(email, password) {
     const currentUrl = this.page.url();
+    this.log('info', `🔍 ensureLoggedIn: Current URL: ${currentUrl}`);
 
     // Check if we're on login page by URL
     if (currentUrl.includes('/login') || currentUrl.includes('/signin')) {
@@ -312,11 +322,28 @@ Respond in JSON format:
       return true; // Indicates we had to re-login
     }
 
-    // AI check for login state - stringify full analysis to catch any format
-    const analysis = await this.analyzePageWithAI('Quick check: is this a login page with username/email and password fields?');
-    const analysisStr = JSON.stringify(analysis.analysis || '').toLowerCase();
-    if (analysisStr.includes('login') || analysisStr.includes('password') || analysisStr.includes('sign in') || analysisStr.includes('email field')) {
-      this.log('warning', `⚠️ AI detected login page, re-logging in...`);
+    // AI check for login state
+    const result = await this.analyzePageWithAI('Quick check: is this a login page with username/email and password fields?');
+    const analysis = result.analysis;
+
+    // Check pageState directly if it's an object
+    let pageStateStr = '';
+    if (typeof analysis === 'object' && analysis !== null) {
+      pageStateStr = (analysis.pageState || analysis.currentState || '').toLowerCase();
+    } else if (typeof analysis === 'string') {
+      pageStateStr = analysis.toLowerCase();
+    }
+
+    const fullAnalysisStr = JSON.stringify(analysis || '').toLowerCase();
+
+    const isLoginPage = pageStateStr.includes('login') ||
+                        pageStateStr.includes('password') ||
+                        pageStateStr.includes('sign in') ||
+                        fullAnalysisStr.includes('"login') ||
+                        fullAnalysisStr.includes('password field');
+
+    if (isLoginPage) {
+      this.log('warning', `⚠️ AI detected login page (pageState: "${pageStateStr}"), re-logging in...`);
       this.isLoggedIn = false;
       await this.login(email, password);
       return true;
@@ -347,15 +374,30 @@ Respond in JSON format:
       // First verify the page state - check if we're still logged in
       let pageAnalysis = await this.analyzePageWithAI('Checking if Add influencer button is visible or if login form is shown');
 
-      // Check if AI detected login page - check all possible fields
-      const analysisStr = JSON.stringify(pageAnalysis.analysis || '').toLowerCase();
-      this.log('info', `🔍 Checking for login keywords in: ${analysisStr.substring(0, 100)}...`);
+      // Check if AI detected login page - check pageState directly AND stringify as fallback
+      const analysis = pageAnalysis.analysis;
+      let pageStateStr = '';
 
-      const isLoginPage = analysisStr.includes('login') ||
-                          analysisStr.includes('password') ||
-                          analysisStr.includes('sign in') ||
-                          analysisStr.includes('email field') ||
-                          analysisStr.includes('email and password');
+      if (typeof analysis === 'object' && analysis !== null) {
+        // Get pageState or currentState directly
+        pageStateStr = (analysis.pageState || analysis.currentState || '').toLowerCase();
+        this.log('info', `🔍 AI pageState: "${pageStateStr}"`);
+      } else if (typeof analysis === 'string') {
+        pageStateStr = analysis.toLowerCase();
+        this.log('info', `🔍 AI response (string): "${pageStateStr.substring(0, 100)}"`);
+      }
+
+      // Also check JSON stringified version as backup
+      const fullAnalysisStr = JSON.stringify(analysis || '').toLowerCase();
+
+      const isLoginPage = pageStateStr.includes('login') ||
+                          pageStateStr.includes('password') ||
+                          pageStateStr.includes('sign in') ||
+                          fullAnalysisStr.includes('"login') ||
+                          fullAnalysisStr.includes('password field') ||
+                          fullAnalysisStr.includes('email and password');
+
+      this.log('info', `🔍 Login page detected: ${isLoginPage}`);
 
       if (isLoginPage) {
         this.log('warning', '⚠️ LOGIN PAGE DETECTED! Re-logging in...');
