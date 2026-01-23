@@ -1122,6 +1122,17 @@ Respond in JSON format:
       // Navigate to campaign
       await this.navigateToCampaign(client.imaiCampaignId);
 
+      // Emit initial progress so UI shows controls immediately
+      this.emit('progress', {
+        current: 0,
+        total: creators.length,
+        added: 0,
+        failed: 0,
+        skipped: 0,
+        currentCreator: creators[0]?.username || '',
+        isRetry: false
+      });
+
       // Process each creator using index-based loop for switch support
       let i = 0;
       while (i < creators.length) {
@@ -1164,6 +1175,17 @@ Respond in JSON format:
         // Mark as processing and emit update
         this.creatorsList[i].status = 'processing';
         this.emitCreatorsUpdate();
+
+        // Emit progress at start of each creator so UI updates immediately
+        this.emit('progress', {
+          current: i,
+          total: creators.length,
+          added: results.added,
+          failed: results.failed,
+          skipped: results.skipped,
+          currentCreator: creator.username,
+          isRetry: false
+        });
 
         this.log('info', '');
         this.log('info', `═══════════════════════════════════════════════════`);
