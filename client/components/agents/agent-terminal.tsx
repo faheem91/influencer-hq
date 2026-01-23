@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -20,7 +20,8 @@ import {
   ChevronUp,
   Users,
   CircleDot,
-  Circle
+  Circle,
+  AlertCircle
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { TerminalLog, AgentProgress, CreatorStatus } from "@/hooks/useAgentStream";
@@ -42,6 +43,67 @@ interface AgentTerminalProps {
   onSwitchCreator?: (username: string) => void;
 }
 
+// Helper to derive progress from logs when SSE progress events aren't received
+function deriveProgressFromLogs(logs: TerminalLog[]): AgentProgress | null {
+  let added = 0;
+  let failed = 0;
+  let skipped = 0;
+  let total = 0;
+  let current = 0;
+  let currentCreator = "";
+
+  for (const log of logs) {
+    const msg = log.message.toLowerCase();
+
+    // Extract total from "Processing X creators" or "Starting to process X creators"
+    const totalMatch = log.message.match(/Processing (\d+) creators?/i) ||
+                       log.message.match(/(\d+) creators? to process/i);
+    if (totalMatch) {
+      total = parseInt(totalMatch[1], 10);
+    }
+
+    // Extract current creator from "Processing creator X/Y: @username" or "Adding @username"
+    const creatorMatch = log.message.match(/Processing creator (\d+)\/(\d+):\s*@?(\w+)/i) ||
+                         log.message.match(/Adding @(\w+)/i) ||
+                         log.message.match(/\[(\d+)\/(\d+)\]\s*@?(\w+)/i);
+    if (creatorMatch) {
+      if (creatorMatch.length >= 4) {
+        current = parseInt(creatorMatch[1], 10);
+        total = parseInt(creatorMatch[2], 10);
+        currentCreator = creatorMatch[3];
+      } else if (creatorMatch[1]) {
+        currentCreator = creatorMatch[1];
+      }
+    }
+
+    // Count outcomes
+    if (msg.includes("successfully added") || msg.includes("✓ added") || log.level === "success") {
+      added++;
+    }
+    if (msg.includes("failed to add") || msg.includes("❌ failed") || (log.level === "error" && msg.includes("@"))) {
+      failed++;
+    }
+    if (msg.includes("skipped") || msg.includes("already exists")) {
+      skipped++;
+    }
+  }
+
+  // If we found some progress indicators, return derived progress
+  if (total > 0 || added > 0 || failed > 0 || skipped > 0) {
+    return {
+      current: current || (added + failed + skipped),
+      total: total || (added + failed + skipped),
+      added,
+      failed,
+      skipped,
+      currentCreator,
+      isRetry: false
+    };
+  }
+
+  return null;
+}
+
 export function AgentTerminal({
   agentId,
   clientName,
@@ -61,6 +123,15 @@ export function AgentTerminal({
   const terminalRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
   const [showCreatorsList, setShowCreatorsList] = useState(false);
+
+  // Derive progress from logs if SSE progress isn't available
+  const derivedProgress = useMemo(() => deriveProgressFromLogs(logs), [logs]);
+
+  // Use SSE progress if available, otherwise use derived progress
+  const effectiveProgress = progress || derivedProgress;
+
+  // Determine if agent is active (running or stopping)
+  const isAgentActive = status === "running" || status === "stopping";
 
   // Auto-scroll to bottom when new logs arrive
   useEffect(() => {
@@ -136,8 +207,8 @@ export function AgentTerminal({
     }
   };
 
-  const progressPercent = progress && progress.total > 0
-    ? Math.round((progress.current / progress.total) * 100)
+  const progressPercent = effectiveProgress && effectiveProgress.total > 0
+    ? Math.round((effectiveProgress.current / effectiveProgress.total) * 100)
     : 0;
 
   const getCreatorStatusIcon = (creatorStatus: CreatorStatus["status"]) => {
@@ -172,85 +243,151 @@ export function AgentTerminal({
 
   return (
     <Card className="overflow-hidden border-zinc-800 bg-zinc-950">
-      <CardHeader className="flex flex-row items-center justify-between border-b border-zinc-800 bg-zinc-900 py-3 px-4">
-        <div className="flex items-center gap-3">
-          <Terminal className="h-5 w-5 text-zinc-400" />
-          <div>
-            <CardTitle className="text-sm font-medium text-white">
-              IMAI Agent Console
-            </CardTitle>
-            <p className="text-xs text-zinc-500">{clientName}</p>
+      <CardHeader className="flex flex-col gap-0 border-b border-zinc-800 bg-zinc-900 p-0">
+        {/* Top row: Title + Status + Main Actions */}
+        <div className="flex flex-row items-center justify-between py-3 px-4">
+          <div className="flex items-center gap-3">
+            <Terminal className="h-5 w-5 text-zinc-400" />
+            <div>
+              <CardTitle className="text-sm font-medium text-white">
+                IMAI Agent Console
+              </CardTitle>
+              <p className="text-xs text-zinc-500">{clientName}</p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            {/* Connection indicator */}
+            <div className="flex items-center gap-1.5">
+              <div
+                className={cn(
+                  "h-2 w-2 rounded-full",
+                  isConnected ? "bg-green-500 animate-pulse" : "bg-zinc-600"
+                )}
+              />
+              <span className="text-xs text-zinc-500">
+                {isConnected ? "Connected" : "Disconnected"}
+              </span>
+            </div>
+
+            {/* Status badge */}
+            <Badge variant={getStatusBadgeVariant()} className="capitalize">
+              {status}
+            </Badge>
+
+            {/* Action buttons */}
+            {isAgentActive ? (
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={onStop}
+                disabled={status === "stopping"}
+                className="h-7 px-2"
+              >
+                {status === "stopping" ? (
+                  <>
+                    <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                    Stopping...
+                  </>
+                ) : (
+                  <>
+                    <Square className="mr-1 h-3 w-3" />
+                    Stop
+                  </>
+                )}
+              </Button>
+            ) : (
+              <Button
+                variant="default"
+                size="sm"
+                onClick={onRunNow}
+                className="h-7 bg-green-600 hover:bg-green-700 px-2"
+              >
+                <Play className="mr-1 h-3 w-3" />
+                Run Now
+              </Button>
+            )}
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          {/* Connection indicator */}
-          <div className="flex items-center gap-1.5">
-            <div
-              className={cn(
-                "h-2 w-2 rounded-full",
-                isConnected ? "bg-green-500 animate-pulse" : "bg-zinc-600"
+        {/* Control bar: ALWAYS visible when agent is running - Skip, Relogin, Creators */}
+        {isAgentActive && (
+          <div className="flex items-center justify-between px-4 py-2 bg-zinc-800/50 border-t border-zinc-700/50">
+            <div className="flex items-center gap-2">
+              {/* Skip button */}
+              {onSkip && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={onSkip}
+                  className="h-7 px-3 text-yellow-500 border-yellow-500/50 hover:bg-yellow-500/10 hover:text-yellow-400"
+                >
+                  <SkipForward className="me-1.5 h-3.5 w-3.5" />
+                  Skip Current
+                </Button>
               )}
-            />
-            <span className="text-xs text-zinc-500">
-              {isConnected ? "Connected" : "Disconnected"}
-            </span>
+              {/* Relogin button */}
+              {onRelogin && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={onRelogin}
+                  className="h-7 px-3 text-blue-500 border-blue-500/50 hover:bg-blue-500/10 hover:text-blue-400"
+                >
+                  <LogIn className="me-1.5 h-3.5 w-3.5" />
+                  Relogin
+                </Button>
+              )}
+            </div>
+
+            <div className="flex items-center gap-3">
+              {/* Creators list toggle */}
+              {creatorsList.length > 0 && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowCreatorsList(!showCreatorsList)}
+                  className="h-7 px-2 text-zinc-400 hover:text-white"
+                >
+                  <Users className="me-1 h-3 w-3" />
+                  Creators ({creatorsList.length})
+                  {showCreatorsList ? (
+                    <ChevronUp className="ms-1 h-3 w-3" />
+                  ) : (
+                    <ChevronDown className="ms-1 h-3 w-3" />
+                  )}
+                </Button>
+              )}
+
+              {/* Running indicator */}
+              <div className="flex items-center gap-1.5 text-xs text-zinc-400">
+                <Loader2 className="h-3 w-3 animate-spin text-blue-500" />
+                <span>Processing...</span>
+              </div>
+            </div>
           </div>
-
-          {/* Status badge */}
-          <Badge variant={getStatusBadgeVariant()} className="capitalize">
-            {status}
-          </Badge>
-
-          {/* Action buttons */}
-          {status === "running" || status === "stopping" ? (
-            <Button
-              variant="destructive"
-              size="sm"
-              onClick={onStop}
-              disabled={status === "stopping"}
-              className="h-7 px-2"
-            >
-              {status === "stopping" ? (
-                <>
-                  <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                  Stopping...
-                </>
-              ) : (
-                <>
-                  <Square className="mr-1 h-3 w-3" />
-                  Stop
-                </>
-              )}
-            </Button>
-          ) : (
-            <Button
-              variant="default"
-              size="sm"
-              onClick={onRunNow}
-              className="h-7 bg-green-600 hover:bg-green-700 px-2"
-            >
-              <Play className="mr-1 h-3 w-3" />
-              Run Now
-            </Button>
-          )}
-        </div>
+        )}
       </CardHeader>
 
-      {/* Progress Bar and Counters */}
-      {progress && (status === "running" || status === "stopping") && (
+      {/* Progress Bar and Counters - Shows when running and we have progress data */}
+      {isAgentActive && effectiveProgress && (
         <div className="border-b border-zinc-800 bg-zinc-900/50 px-4 py-3">
           {/* Progress bar */}
           <div className="mb-3">
             <div className="flex items-center justify-between mb-1.5">
               <span className="text-xs text-zinc-400">
-                Processing {progress.current} of {progress.total} creators
-                {progress.currentCreator && (
-                  <span className="text-zinc-500"> • @{progress.currentCreator}</span>
+                Processing {effectiveProgress.current} of {effectiveProgress.total} creators
+                {effectiveProgress.currentCreator && (
+                  <span className="text-zinc-500"> • @{effectiveProgress.currentCreator}</span>
                 )}
-                {progress.isRetry && (
+                {effectiveProgress.isRetry && (
                   <Badge variant="outline" className="ml-2 text-yellow-500 border-yellow-500 text-[10px] px-1 py-0">
                     RETRY
+                  </Badge>
+                )}
+                {!progress && derivedProgress && (
+                  <Badge variant="outline" className="ml-2 text-zinc-500 border-zinc-500 text-[10px] px-1 py-0">
+                    DERIVED
                   </Badge>
                 )}
               </span>
@@ -264,69 +401,24 @@ export function AgentTerminal({
             <div className="flex items-center gap-1.5">
               <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
               <span className="text-zinc-400">Added:</span>
-              <span className="text-green-400 font-semibold">{progress.added}</span>
+              <span className="text-green-400 font-semibold">{effectiveProgress.added}</span>
             </div>
             <div className="flex items-center gap-1.5">
               <XCircle className="h-3.5 w-3.5 text-red-500" />
               <span className="text-zinc-400">Failed:</span>
-              <span className="text-red-400 font-semibold">{progress.failed}</span>
+              <span className="text-red-400 font-semibold">{effectiveProgress.failed}</span>
             </div>
             <div className="flex items-center gap-1.5">
               <SkipForward className="h-3.5 w-3.5 text-yellow-500" />
               <span className="text-zinc-400">Skipped:</span>
-              <span className="text-yellow-400 font-semibold">{progress.skipped}</span>
+              <span className="text-yellow-400 font-semibold">{effectiveProgress.skipped}</span>
             </div>
-          </div>
-
-          {/* Action buttons row */}
-          <div className="flex items-center justify-between mt-3 pt-3 border-t border-zinc-700/50">
-            <div className="flex items-center gap-2">
-              {onSkip && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={onSkip}
-                  className="h-7 px-2 text-yellow-500 border-yellow-500/50 hover:bg-yellow-500/10 hover:text-yellow-400"
-                >
-                  <SkipForward className="me-1 h-3 w-3" />
-                  Skip
-                </Button>
-              )}
-              {onRelogin && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={onRelogin}
-                  className="h-7 px-2 text-blue-500 border-blue-500/50 hover:bg-blue-500/10 hover:text-blue-400"
-                >
-                  <LogIn className="me-1 h-3 w-3" />
-                  Relogin
-                </Button>
-              )}
-            </div>
-
-            {creatorsList.length > 0 && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setShowCreatorsList(!showCreatorsList)}
-                className="h-7 px-2 text-zinc-400 hover:text-white"
-              >
-                <Users className="me-1 h-3 w-3" />
-                Creators ({creatorsList.length})
-                {showCreatorsList ? (
-                  <ChevronUp className="ms-1 h-3 w-3" />
-                ) : (
-                  <ChevronDown className="ms-1 h-3 w-3" />
-                )}
-              </Button>
-            )}
           </div>
         </div>
       )}
 
       {/* Creators List Panel */}
-      {showCreatorsList && creatorsList.length > 0 && (status === "running" || status === "stopping") && (
+      {showCreatorsList && creatorsList.length > 0 && isAgentActive && (
         <div className="border-b border-zinc-800 bg-zinc-900/30 px-4 py-2 max-h-48 overflow-y-auto">
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-1">
             {creatorsList.map((creator, index) => (
