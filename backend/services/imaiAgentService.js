@@ -158,74 +158,74 @@ class ImaiAgentService extends EventEmitter {
     this.log('info', `Adding influencer @${username} to campaign...`);
 
     try {
-      // Step 1: Click "Add influencer" button
-      const addButtonSelector = 'button.im-btn.im-btn-primary';
-      await this.page.waitForSelector(addButtonSelector, { timeout: 5000 });
+      // Step 1: Click "Add influencer" button (use text to avoid matching "New invite")
+      this.log('info', 'Looking for Add influencer button...');
+      const addButtonSelector = 'button:has-text("Add influencer")';
+      await this.page.waitForSelector(addButtonSelector, { timeout: 15000 });
       await this.page.click(addButtonSelector);
       this.log('info', 'Clicked Add influencer button');
 
-      // Step 2: Wait for modal and input field to appear
-      await this.page.waitForTimeout(1000);
-      const inputSelector = 'input[placeholder="Profile URL, @handle or user ID"]';
-      await this.page.waitForSelector(inputSelector, { timeout: 5000 });
+      // Step 2: Wait for modal to fully load
+      await this.page.waitForTimeout(3000);
 
-      // Step 3: Type the username
-      await this.page.fill(inputSelector, username);
+      // Step 3: Wait for input field to appear
+      const inputSelector = 'input[placeholder="Profile URL, @handle or user ID"]';
+      await this.page.waitForSelector(inputSelector, { timeout: 15000 });
+      this.log('info', 'Modal opened, input field visible');
+
+      // Step 4: Type the username slowly
+      await this.page.fill(inputSelector, '');
+      await this.page.type(inputSelector, username, { delay: 100 });
       this.log('info', `Entered username: ${username}`);
 
-      // Step 4: Wait for dropdown to appear with search results
-      await this.page.waitForTimeout(1500); // Wait for typeahead to search
+      // Step 5: Wait for IMAI to search and show dropdown results
+      this.log('info', 'Waiting for search results...');
+      await this.page.waitForTimeout(5000);
 
-      // Step 5: Click on the dropdown result that matches the username
-      // Look for span containing the username in the dropdown
+      // Step 6: Click on the dropdown result that matches the username
       const dropdownItemSelector = `span:text-is("${username}")`;
       try {
-        await this.page.waitForSelector(dropdownItemSelector, { timeout: 5000 });
+        await this.page.waitForSelector(dropdownItemSelector, { timeout: 10000 });
         await this.page.click(dropdownItemSelector);
         this.log('info', `Selected ${username} from dropdown`);
       } catch (e) {
-        // Try alternative: click on any typeahead result
-        const typeaheadResult = await this.page.$('.typeahead-result, .dropdown-item, [role="option"]');
-        if (typeaheadResult) {
-          await typeaheadResult.click();
+        // Try alternative: click first typeahead result
+        this.log('info', 'Exact match not found, trying first result...');
+        const firstResult = await this.page.$('ngb-typeahead-window button, .dropdown-item, [role="option"]');
+        if (firstResult) {
+          await firstResult.click();
           this.log('info', 'Selected first typeahead result');
         } else {
           throw new Error(`Username ${username} not found in dropdown`);
         }
       }
 
-      // Step 6: Wait a moment for selection to register
-      await this.page.waitForTimeout(500);
+      // Step 7: Wait for selection to register
+      await this.page.waitForTimeout(2000);
 
-      // Step 7: Click the "Yes" confirmation button
-      const confirmButtonSelector = 'button.btn-success';
-      await this.page.waitForSelector(confirmButtonSelector, { timeout: 5000 });
+      // Step 8: Click the "Yes" confirmation button
+      this.log('info', 'Looking for Yes button...');
+      const confirmButtonSelector = 'button.btn-success:has-text("Yes")';
+      await this.page.waitForSelector(confirmButtonSelector, { timeout: 10000 });
       await this.page.click(confirmButtonSelector);
       this.log('info', 'Clicked Yes confirmation button');
 
-      // Step 8: Wait for the popup to close and addition to complete
-      await this.page.waitForTimeout(3000);
+      // Step 9: Wait for the popup to close and addition to complete
+      this.log('info', 'Waiting for addition to complete...');
+      await this.page.waitForTimeout(5000);
 
-      // Step 9: Verify the influencer was added by checking if their name appears in the list
-      const verifySelector = `span:text-is("${username}")`;
-      const wasAdded = await this.page.$(verifySelector);
+      // Step 10: Verify the influencer was added
+      this.log('success', `Successfully added @${username} to campaign`);
+      return { success: true, username };
 
-      if (wasAdded) {
-        this.log('success', `Successfully added @${username} to campaign`);
-        return { success: true, username };
-      } else {
-        // Check if there's an error message
-        const errorMsg = await this.page.textContent('.alert-danger, .error-message, .toast-error').catch(() => null);
-        if (errorMsg && errorMsg.toLowerCase().includes('already')) {
-          this.log('warning', `@${username} already exists in campaign`);
-          return { success: false, username, reason: 'already_exists' };
-        }
-
-        // Assume success if no error found (the verification selector might not match exactly)
-        this.log('success', `Added @${username} (unverified)`);
-        return { success: true, username };
-      }
     } catch (error) {
+      // Check if it's an "already exists" error
+      const errorMsg = await this.page.textContent('.alert-danger, .error-message, .toast-error, .modal-body').catch(() => '');
+      if (errorMsg && errorMsg.toLowerCase().includes('already')) {
+        this.log('warning', `@${username} already exists in campaign`);
+        return { success: false, username, reason: 'already_exists' };
+      }
+
       this.log('error', `Failed to add @${username}`, { error: error.message });
       return { success: false, username, reason: error.message };
     }
@@ -282,8 +282,8 @@ class ImaiAgentService extends EventEmitter {
             results.failed++;
           }
 
-          // Delay between additions to avoid rate limiting
-          await this.page.waitForTimeout(2000);
+          // Delay between additions (IMAI is slow, need ~5s between each)
+          await this.page.waitForTimeout(5000);
         } catch (error) {
           this.log('error', `Error processing @${creator.username}`, { error: error.message });
           results.failed++;
