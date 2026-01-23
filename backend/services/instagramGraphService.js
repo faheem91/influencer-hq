@@ -1,5 +1,5 @@
 const axios = require('axios');
-const instagramPrivateService = require('./instagramService');
+const instagramPlaywrightService = require('./instagramPlaywrightService');
 
 class InstagramGraphService {
   constructor() {
@@ -196,17 +196,23 @@ class InstagramGraphService {
         console.log('   Note: Hashtag search limit reached (30 unique hashtags per 7 days)');
       }
 
-      // Error code 10: Instagram Public Content Access required - fallback to private API
+      // Error code 10: Instagram Public Content Access required - fallback to Playwright
       if (error.response?.data?.error?.code === 10) {
         console.log('   ⚠️  Graph API requires "Instagram Public Content Access" permission');
-        console.log('   🔄 Falling back to private API for hashtag search...');
+        console.log('   🔄 Falling back to Playwright browser automation...');
         try {
-          const results = await instagramPrivateService.searchByHashtag(cleanHashtag);
-          console.log(`   ✅ Private API found ${results.length} posts`);
-          // Transform private API format to Graph API format for client compatibility
-          return results.map(post => this.transformPrivateApiPost(post, cleanHashtag));
-        } catch (privateError) {
-          console.error('   ❌ Private API fallback failed:', privateError.message);
+          const results = await instagramPlaywrightService.searchHashtag(cleanHashtag);
+
+          // Check if verification is needed
+          if (results.needsVerification) {
+            console.log('   ⚠️  Instagram verification required');
+            return [];
+          }
+
+          console.log(`   ✅ Playwright found ${results.length} posts`);
+          return results;
+        } catch (playwrightError) {
+          console.error('   ❌ Playwright fallback failed:', playwrightError.message);
           throw error; // Throw original Graph API error
         }
       }
@@ -300,16 +306,22 @@ class InstagramGraphService {
         return response.data.data || [];
       }
 
-      // For other users, fall back to private API
+      // For other users, fall back to Playwright
       console.log(`   Graph API cannot fetch media from other users directly`);
-      console.log(`   🔄 Falling back to private API for user search...`);
+      console.log(`   🔄 Falling back to Playwright browser automation...`);
       try {
-        const results = await instagramPrivateService.searchByUsername(username);
-        console.log(`   ✅ Private API found ${results.length} posts`);
-        // Transform private API format to Graph API format for client compatibility
-        return results.map(post => this.transformPrivateApiPost(post, `@${username}`));
-      } catch (privateError) {
-        console.error('   ❌ Private API fallback failed:', privateError.message);
+        const results = await instagramPlaywrightService.searchByUsername(username);
+
+        // Check if verification is needed
+        if (results.needsVerification) {
+          console.log('   ⚠️  Instagram verification required');
+          return [];
+        }
+
+        console.log(`   ✅ Playwright found ${results.length} posts`);
+        return results;
+      } catch (playwrightError) {
+        console.error('   ❌ Playwright fallback failed:', playwrightError.message);
         return [];
       }
     } catch (error) {
