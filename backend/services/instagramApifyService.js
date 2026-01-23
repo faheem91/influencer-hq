@@ -152,9 +152,7 @@ class InstagramApifyService {
       mediaType: this.getMediaType(post),
       mediaUrl: post.displayUrl || post.url || post.imageUrl || null,
       permalink: post.url || `https://www.instagram.com/p/${post.shortCode || post.code}/`,
-      timestamp: post.timestamp || post.takenAtTimestamp
-        ? new Date((post.timestamp || post.takenAtTimestamp) * 1000).toISOString()
-        : null,
+      timestamp: this.parseTimestamp(post),
 
       creator: {
         username: post.ownerUsername || post.username || post.owner?.username || 'unknown',
@@ -179,6 +177,37 @@ class InstagramApifyService {
     if (post.isVideo || post.videoUrl) return 'VIDEO';
     if (post.childPosts || post.sidecarChildren) return 'CAROUSEL';
     return 'IMAGE';
+  }
+
+  parseTimestamp(post) {
+    try {
+      // Try different timestamp fields
+      const ts = post.timestamp || post.takenAtTimestamp || post.takenAt;
+
+      if (!ts) return null;
+
+      // If it's already a string in ISO format
+      if (typeof ts === 'string' && ts.includes('T')) {
+        return ts;
+      }
+
+      // If it's a Unix timestamp (seconds)
+      if (typeof ts === 'number') {
+        // If it's in milliseconds (13 digits), convert to seconds
+        const timestamp = ts > 9999999999 ? ts : ts * 1000;
+        return new Date(timestamp).toISOString();
+      }
+
+      // If it's a date string
+      const date = new Date(ts);
+      if (!isNaN(date.getTime())) {
+        return date.toISOString();
+      }
+
+      return null;
+    } catch (e) {
+      return null;
+    }
   }
 }
 
