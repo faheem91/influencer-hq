@@ -93,18 +93,25 @@ class ImaiAgentService extends EventEmitter {
     this.log('info', `Navigating to campaign ${campaignId}...`);
 
     try {
+      // Check if campaignId is already a full URL
+      const campaignUrl = campaignId.startsWith('http')
+        ? campaignId
+        : `https://imai.co/campaigns/${campaignId}`;
+
       // Navigate to campaign page
-      await this.page.goto(`https://imai.co/campaigns/${campaignId}`, { waitUntil: 'networkidle' });
+      await this.page.goto(campaignUrl, { waitUntil: 'networkidle' });
 
       // Wait for campaign page to load
       await this.page.waitForSelector('body', { timeout: 10000 });
+      await this.page.waitForTimeout(2000); // Wait for Angular app
 
       const currentUrl = this.page.url();
-      if (!currentUrl.includes(`campaigns/${campaignId}`)) {
+      // Check if we're on a campaign-related page (could be /c/ or /campaigns/)
+      if (!currentUrl.includes('/c/') && !currentUrl.includes('/campaigns/')) {
         throw new Error('Failed to navigate to campaign page');
       }
 
-      this.log('success', `Navigated to campaign ${campaignId}`);
+      this.log('success', `Navigated to campaign page`);
       return true;
     } catch (error) {
       this.log('error', `Failed to navigate to campaign`, { error: error.message });
