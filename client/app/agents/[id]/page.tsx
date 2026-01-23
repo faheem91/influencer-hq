@@ -325,10 +325,12 @@ export default function AgentDetailPage() {
     return null;
   }
 
-  const getStatusColor = (status: Agent["status"]) => {
+  const getStatusColor = (status: string) => {
     switch (status) {
       case "running":
         return "success";
+      case "stopping":
+        return "warning";
       case "error":
         return "destructive";
       case "paused":
@@ -420,8 +422,16 @@ export default function AgentDetailPage() {
                   <p className="text-sm font-medium text-muted-foreground">
                     Status
                   </p>
-                  <Badge variant={getStatusColor(agent.status)}>
-                    {agent.status}
+                  <Badge variant={getStatusColor(
+                    streamStatus === "stopping" ? "stopping" :
+                    streamStatus === "running" ? "running" :
+                    isRunning ? "running" :
+                    agent.status
+                  )}>
+                    {streamStatus === "stopping" ? "stopping" :
+                     streamStatus === "running" ? "running" :
+                     isRunning ? "running" :
+                     agent.status}
                   </Badge>
                 </div>
                 <div className="min-w-0">
