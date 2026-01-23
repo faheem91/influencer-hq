@@ -419,6 +419,8 @@ Respond in JSON format:
       const analysis = pageAnalysis.analysis;
       let pageStateStr = '';
 
+      this.log('info', `🔍 Analysis type: ${typeof analysis}, success: ${pageAnalysis.success}`);
+
       if (typeof analysis === 'object' && analysis !== null) {
         // Get pageState or currentState directly
         pageStateStr = (analysis.pageState || analysis.currentState || '').toLowerCase();
@@ -426,6 +428,8 @@ Respond in JSON format:
       } else if (typeof analysis === 'string') {
         pageStateStr = analysis.toLowerCase();
         this.log('info', `🔍 AI response (string): "${pageStateStr.substring(0, 100)}"`);
+      } else {
+        this.log('warning', `🔍 Unexpected analysis type: ${JSON.stringify(analysis)}`);
       }
 
       // Also check JSON stringified version as backup
