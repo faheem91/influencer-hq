@@ -1,4 +1,5 @@
 const axios = require('axios');
+const instagramApifyService = require('./instagramApifyService');
 const instagramPlaywrightService = require('./instagramPlaywrightService');
 
 class InstagramGraphService {
@@ -196,24 +197,33 @@ class InstagramGraphService {
         console.log('   Note: Hashtag search limit reached (30 unique hashtags per 7 days)');
       }
 
-      // Error code 10: Instagram Public Content Access required - fallback to Playwright
+      // Error code 10: Instagram Public Content Access required - fallback to Apify, then Playwright
       if (error.response?.data?.error?.code === 10) {
         console.log('   ⚠️  Graph API requires "Instagram Public Content Access" permission');
-        console.log('   🔄 Falling back to Playwright browser automation...');
+
+        // Try Apify first
+        console.log('   🔄 Falling back to Apify...');
         try {
-          const results = await instagramPlaywrightService.searchHashtag(cleanHashtag);
-
-          // Check if verification is needed
-          if (results.needsVerification) {
-            console.log('   ⚠️  Instagram verification required');
-            return [];
-          }
-
-          console.log(`   ✅ Playwright found ${results.length} posts`);
+          const results = await instagramApifyService.searchHashtag(cleanHashtag);
+          console.log(`   ✅ Apify found ${results.length} posts`);
           return results;
-        } catch (playwrightError) {
-          console.error('   ❌ Playwright fallback failed:', playwrightError.message);
-          throw error; // Throw original Graph API error
+        } catch (apifyError) {
+          console.error('   ❌ Apify fallback failed:', apifyError.message);
+
+          // Try Playwright as last resort
+          console.log('   🔄 Falling back to Playwright browser automation...');
+          try {
+            const results = await instagramPlaywrightService.searchHashtag(cleanHashtag);
+            if (results.needsVerification) {
+              console.log('   ⚠️  Instagram verification required');
+              return [];
+            }
+            console.log(`   ✅ Playwright found ${results.length} posts`);
+            return results;
+          } catch (playwrightError) {
+            console.error('   ❌ Playwright fallback failed:', playwrightError.message);
+            throw error; // Throw original Graph API error
+          }
         }
       }
 
@@ -306,23 +316,32 @@ class InstagramGraphService {
         return response.data.data || [];
       }
 
-      // For other users, fall back to Playwright
+      // For other users, fall back to Apify, then Playwright
       console.log(`   Graph API cannot fetch media from other users directly`);
-      console.log(`   🔄 Falling back to Playwright browser automation...`);
-      try {
-        const results = await instagramPlaywrightService.searchByUsername(username);
 
-        // Check if verification is needed
-        if (results.needsVerification) {
-          console.log('   ⚠️  Instagram verification required');
+      // Try Apify first
+      console.log(`   🔄 Falling back to Apify...`);
+      try {
+        const results = await instagramApifyService.searchByUsername(username);
+        console.log(`   ✅ Apify found ${results.length} posts`);
+        return results;
+      } catch (apifyError) {
+        console.error('   ❌ Apify fallback failed:', apifyError.message);
+
+        // Try Playwright as last resort
+        console.log(`   🔄 Falling back to Playwright browser automation...`);
+        try {
+          const results = await instagramPlaywrightService.searchByUsername(username);
+          if (results.needsVerification) {
+            console.log('   ⚠️  Instagram verification required');
+            return [];
+          }
+          console.log(`   ✅ Playwright found ${results.length} posts`);
+          return results;
+        } catch (playwrightError) {
+          console.error('   ❌ Playwright fallback failed:', playwrightError.message);
           return [];
         }
-
-        console.log(`   ✅ Playwright found ${results.length} posts`);
-        return results;
-      } catch (playwrightError) {
-        console.error('   ❌ Playwright fallback failed:', playwrightError.message);
-        return [];
       }
     } catch (error) {
       console.error(`❌ User media fetch failed:`, error.response?.data || error.message);
