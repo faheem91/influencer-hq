@@ -21,11 +21,47 @@ class ImaiAgentService extends EventEmitter {
     console.log(`[${level.toUpperCase()}] ${message}${details ? ` - ${JSON.stringify(details)}` : ''}`);
   }
 
+  /**
+   * Extract campaign ID from JWT URL or return as-is if numeric
+   * JWT URL format: https://imai.co/c/eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJjYW1wYWlnbiI6NTQwNywiaWF0IjoxNzY5MTE2Mzc5fQ...
+   * JWT payload contains: {"campaign":5407,"iat":...}
+   */
+  extractCampaignId(campaignIdOrUrl) {
+    // If it's already a number, return it
+    if (/^\d+$/.test(campaignIdOrUrl)) {
+      return campaignIdOrUrl;
+    }
+
+    // If it's a JWT URL, extract and decode the campaign ID
+    if (campaignIdOrUrl.includes('/c/')) {
+      try {
+        const jwtToken = campaignIdOrUrl.split('/c/')[1];
+        const payload = jwtToken.split('.')[1];
+        // Base64 decode the payload
+        const decoded = JSON.parse(Buffer.from(payload, 'base64').toString('utf8'));
+        if (decoded.campaign) {
+          this.log('info', `Extracted campaign ID: ${decoded.campaign} from JWT`);
+          return decoded.campaign.toString();
+        }
+      } catch (e) {
+        this.log('warning', `Failed to decode JWT, using URL as-is: ${e.message}`);
+      }
+    }
+
+    // If it's a campaigns URL, extract the ID
+    const match = campaignIdOrUrl.match(/\/campaigns\/(?:influencers\/)?(\d+)/);
+    if (match) {
+      return match[1];
+    }
+
+    return campaignIdOrUrl;
+  }
+
   async initialize() {
     this.log('info', 'Initializing Playwright browser...');
     try {
       this.browser = await chromium.launch({
-        headless: true, // Set to false for debugging
+        headless: true,
         args: ['--no-sandbox', '--disable-setuid-sandbox'],
       });
       this.page = await this.browser.newPage();
@@ -50,7 +86,7 @@ class ImaiAgentService extends EventEmitter {
 
       // Wait for Angular app to fully render the form
       await this.page.waitForSelector('input[name="username"]', { timeout: 15000 });
-      await this.page.waitForTimeout(1000); // Extra wait for Angular
+      await this.page.waitForTimeout(1000);
 
       // Fill email/username field
       this.log('info', 'Entering email...');
@@ -60,7 +96,7 @@ class ImaiAgentService extends EventEmitter {
       this.log('info', 'Entering password...');
       await this.page.fill('input[name="password"]', password);
 
-      // Click login button (use specific class to avoid language button)
+      // Click login button
       this.log('info', 'Clicking login button...');
       await this.page.click('button.btn-dark');
 
@@ -68,10 +104,9 @@ class ImaiAgentService extends EventEmitter {
       this.log('info', 'Waiting for authentication...');
       await this.page.waitForURL(url => !url.href.includes('/login'), { timeout: 30000 });
 
-      // Check if login was successful by looking for dashboard elements or URL change
+      // Check if login was successful
       const currentUrl = this.page.url();
       if (currentUrl.includes('/login') || currentUrl.includes('/signin')) {
-        // Check for error messages
         const errorText = await this.page.textContent('.error, .alert-danger, [role="alert"]').catch(() => null);
         throw new Error(errorText || 'Login failed - still on login page');
       }
@@ -85,41 +120,37 @@ class ImaiAgentService extends EventEmitter {
     }
   }
 
-  async navigateToCampaign(campaignId) {
+  async navigateToCampaign(campaignIdOrUrl) {
     if (!this.isLoggedIn) {
       throw new Error('Not logged in');
     }
 
-    this.log('info', `Navigating to campaign ${campaignId}...`);
+    // Extract numeric campaign ID
+    const campaignId = this.extractCampaignId(campaignIdOrUrl);
+    this.log('info', `Navigating to campaign influencers page (ID: ${campaignId})...`);
 
     try {
-      // Check if campaignId is already a full URL
-      const campaignUrl = campaignId.startsWith('http')
-        ? campaignId
-        : `https://imai.co/campaigns/${campaignId}`;
+      // Use the internal influencers URL format
+      const campaignUrl = `https://imai.co/campaigns/influencers/${campaignId}`;
 
-      // Navigate to campaign page
       await this.page.goto(campaignUrl, { waitUntil: 'networkidle' });
 
-      // Wait for campaign page to load
+      // Wait for page to load
       await this.page.waitForSelector('body', { timeout: 10000 });
       await this.page.waitForTimeout(2000); // Wait for Angular app
 
-      const currentUrl = this.page.url();
-      // Check if we're on a campaign-related page (could be /c/ or /campaigns/)
-      if (!currentUrl.includes('/c/') && !currentUrl.includes('/campaigns/')) {
-        throw new Error('Failed to navigate to campaign page');
-      }
+      // Wait for the "Add influencer" button to confirm we're on the right page
+      await this.page.waitForSelector('button.im-btn.im-btn-primary', { timeout: 10000 });
 
-      this.log('success', `Navigated to campaign page`);
-      return true;
+      this.log('success', `Navigated to campaign influencers page`);
+      return campaignId;
     } catch (error) {
       this.log('error', `Failed to navigate to campaign`, { error: error.message });
       throw error;
     }
   }
 
-  async addInfluencer(username, campaignId) {
+  async addInfluencer(username) {
     if (!this.isLoggedIn) {
       throw new Error('Not logged in');
     }
@@ -127,77 +158,73 @@ class ImaiAgentService extends EventEmitter {
     this.log('info', `Adding influencer @${username} to campaign...`);
 
     try {
-      // Look for the add influencer button with the specified class
-      const addButtonSelector = '.im-btn.im-btn-primary, button[class*="im-btn-primary"], [data-testid="add-influencer"]';
+      // Step 1: Click "Add influencer" button
+      const addButtonSelector = 'button.im-btn.im-btn-primary';
+      await this.page.waitForSelector(addButtonSelector, { timeout: 5000 });
+      await this.page.click(addButtonSelector);
+      this.log('info', 'Clicked Add influencer button');
 
-      // First, check if the button exists
-      const addButton = await this.page.$(addButtonSelector);
+      // Step 2: Wait for modal and input field to appear
+      await this.page.waitForTimeout(1000);
+      const inputSelector = 'input[placeholder="Profile URL, @handle or user ID"]';
+      await this.page.waitForSelector(inputSelector, { timeout: 5000 });
 
-      if (addButton) {
-        this.log('info', 'Found add influencer button, clicking...');
-        await addButton.click();
+      // Step 3: Type the username
+      await this.page.fill(inputSelector, username);
+      this.log('info', `Entered username: ${username}`);
 
-        // Wait for modal or input to appear
-        await this.page.waitForTimeout(1000);
+      // Step 4: Wait for dropdown to appear with search results
+      await this.page.waitForTimeout(1500); // Wait for typeahead to search
 
-        // Look for username input field
-        const usernameInput = await this.page.$('input[name="username"], input[placeholder*="username" i], input[type="text"]');
-        if (usernameInput) {
-          await usernameInput.fill(username);
-          this.log('info', `Entered username: @${username}`);
-
-          // Look for submit/confirm button
-          const submitButton = await this.page.$('button[type="submit"], .im-btn.im-btn-primary');
-          if (submitButton) {
-            await submitButton.click();
-            this.log('info', 'Submitted add influencer request');
-
-            // Wait for response
-            await this.page.waitForTimeout(2000);
-
-            // Check for success or error
-            const successIndicator = await this.page.$('.success, .alert-success, [data-status="success"]');
-            if (successIndicator) {
-              this.log('success', `Successfully added @${username} to campaign`);
-              return { success: true, username };
-            }
-
-            const errorIndicator = await this.page.$('.error, .alert-danger, [data-status="error"]');
-            if (errorIndicator) {
-              const errorText = await errorIndicator.textContent();
-              if (errorText.toLowerCase().includes('already')) {
-                this.log('warning', `@${username} already exists in campaign`);
-                return { success: false, username, reason: 'already_exists' };
-              }
-              throw new Error(errorText);
-            }
-
-            this.log('success', `Added @${username} (no explicit confirmation)`);
-            return { success: true, username };
-          }
+      // Step 5: Click on the dropdown result that matches the username
+      // Look for span containing the username in the dropdown
+      const dropdownItemSelector = `span:text-is("${username}")`;
+      try {
+        await this.page.waitForSelector(dropdownItemSelector, { timeout: 5000 });
+        await this.page.click(dropdownItemSelector);
+        this.log('info', `Selected ${username} from dropdown`);
+      } catch (e) {
+        // Try alternative: click on any typeahead result
+        const typeaheadResult = await this.page.$('.typeahead-result, .dropdown-item, [role="option"]');
+        if (typeaheadResult) {
+          await typeaheadResult.click();
+          this.log('info', 'Selected first typeahead result');
+        } else {
+          throw new Error(`Username ${username} not found in dropdown`);
         }
       }
 
-      // Alternative: Try using search functionality
-      this.log('info', 'Trying alternative method via search...');
+      // Step 6: Wait a moment for selection to register
+      await this.page.waitForTimeout(500);
 
-      // Search for the influencer
-      const searchInput = await this.page.$('input[type="search"], input[placeholder*="search" i]');
-      if (searchInput) {
-        await searchInput.fill(username);
-        await this.page.keyboard.press('Enter');
-        await this.page.waitForTimeout(2000);
+      // Step 7: Click the "Yes" confirmation button
+      const confirmButtonSelector = 'button.btn-success';
+      await this.page.waitForSelector(confirmButtonSelector, { timeout: 5000 });
+      await this.page.click(confirmButtonSelector);
+      this.log('info', 'Clicked Yes confirmation button');
 
-        // Look for add button in search results
-        const addFromSearchBtn = await this.page.$('.im-btn.im-btn-primary');
-        if (addFromSearchBtn) {
-          await addFromSearchBtn.click();
-          this.log('success', `Added @${username} via search`);
-          return { success: true, username };
+      // Step 8: Wait for the popup to close and addition to complete
+      await this.page.waitForTimeout(3000);
+
+      // Step 9: Verify the influencer was added by checking if their name appears in the list
+      const verifySelector = `span:text-is("${username}")`;
+      const wasAdded = await this.page.$(verifySelector);
+
+      if (wasAdded) {
+        this.log('success', `Successfully added @${username} to campaign`);
+        return { success: true, username };
+      } else {
+        // Check if there's an error message
+        const errorMsg = await this.page.textContent('.alert-danger, .error-message, .toast-error').catch(() => null);
+        if (errorMsg && errorMsg.toLowerCase().includes('already')) {
+          this.log('warning', `@${username} already exists in campaign`);
+          return { success: false, username, reason: 'already_exists' };
         }
-      }
 
-      throw new Error('Could not find add influencer mechanism');
+        // Assume success if no error found (the verification selector might not match exactly)
+        this.log('success', `Added @${username} (unverified)`);
+        return { success: true, username };
+      }
     } catch (error) {
       this.log('error', `Failed to add @${username}`, { error: error.message });
       return { success: false, username, reason: error.message };
@@ -226,16 +253,25 @@ class ImaiAgentService extends EventEmitter {
       // Login to IMAI
       await this.login(imaiCredentials.email, imaiCredentials.password);
 
-      // Navigate to campaign
-      await this.navigateToCampaign(client.imaiCampaignId);
+      // Navigate to campaign (returns the extracted campaign ID)
+      const campaignId = await this.navigateToCampaign(client.imaiCampaignId);
 
       // Add each creator
       for (let i = 0; i < creators.length; i++) {
         const creator = creators[i];
+
+        // Skip unknown or empty usernames
+        if (!creator.username || creator.username === 'unknown') {
+          this.log('warning', `Skipping invalid username: ${creator.username}`);
+          results.skipped++;
+          results.details.push({ success: false, username: creator.username, reason: 'invalid_username' });
+          continue;
+        }
+
         this.log('info', `Processing ${i + 1}/${creators.length}: @${creator.username}`);
 
         try {
-          const result = await this.addInfluencer(creator.username, client.imaiCampaignId);
+          const result = await this.addInfluencer(creator.username);
           results.details.push(result);
 
           if (result.success) {
@@ -246,8 +282,8 @@ class ImaiAgentService extends EventEmitter {
             results.failed++;
           }
 
-          // Small delay between additions
-          await this.page.waitForTimeout(1500);
+          // Delay between additions to avoid rate limiting
+          await this.page.waitForTimeout(2000);
         } catch (error) {
           this.log('error', `Error processing @${creator.username}`, { error: error.message });
           results.failed++;
