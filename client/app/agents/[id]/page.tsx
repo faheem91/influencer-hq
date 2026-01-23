@@ -68,12 +68,11 @@ export default function AgentDetailPage() {
     loadData();
   }, [agentId, router]);
 
-  const handleStatusChange = (status: Agent["status"]) => {
+  const handleStatusChange = async (status: Agent["status"]) => {
     if (agent) {
-      startTransition(async () => {
-        await updateAgentStatus(agent.id, status);
-        loadData();
-      });
+      await updateAgentStatus(agent.id, status);
+      // Don't call loadData() here - it can reset isRunning prematurely
+      // The status will be updated via SSE
     }
   };
 
@@ -277,7 +276,13 @@ export default function AgentDetailPage() {
         <AgentTerminal
           agentId={agentId}
           clientName={agent.clientName}
-          status={streamStatus === "stopping" ? "stopping" : isRunning ? "running" : agent.status}
+          status={
+            // Priority: SSE status > local isRunning > database status
+            streamStatus === "stopping" ? "stopping" :
+            streamStatus === "running" ? "running" :
+            isRunning ? "running" :
+            agent.status
+          }
           nextRun={getNextRunTime()}
           onRunNow={handleRunNow}
           onStop={handleStop}
