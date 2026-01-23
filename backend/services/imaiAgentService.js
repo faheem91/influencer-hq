@@ -308,6 +308,47 @@ Respond in JSON format:
   }
 
   /**
+   * Close any open modals to reset page state
+   */
+  async ensureModalClosed() {
+    try {
+      // Check if modal is visible
+      const modal = await this.page.$('modal-container, .modal.show, [role="dialog"]');
+      if (modal) {
+        this.log('info', '🔄 Closing open modal...');
+
+        // Try Escape key first
+        await this.page.keyboard.press('Escape');
+        await this.page.waitForTimeout(500);
+
+        // Check if still open
+        const stillOpen = await this.page.$('modal-container, .modal.show');
+        if (stillOpen) {
+          // Try clicking outside
+          await this.page.mouse.click(10, 10);
+          await this.page.waitForTimeout(500);
+        }
+
+        // Try clicking any close/cancel button
+        try {
+          const closeBtn = await this.page.$('button.close, button[aria-label="Close"], .btn-close, button:has-text("Cancel"), button:has-text("No")');
+          if (closeBtn) {
+            await closeBtn.click();
+            await this.page.waitForTimeout(500);
+          }
+        } catch (e) {
+          // Ignore
+        }
+
+        this.log('info', '✓ Modal cleanup complete');
+      }
+    } catch (e) {
+      // Ignore errors during modal cleanup
+      this.log('warning', `Modal cleanup error (ignored): ${e.message}`);
+    }
+  }
+
+  /**
    * Check if we're still logged in, re-login if needed
    */
   async ensureLoggedIn(email, password) {
@@ -410,9 +451,44 @@ Respond in JSON format:
         pageAnalysis = await this.analyzePageWithAI('Verifying Add influencer button is now visible after re-login');
       }
 
+      // Check if a modal is already open (from previous operation)
+      const hasOpenModal = pageStateStr.includes('modal') ||
+                           fullAnalysisStr.includes('modal') ||
+                           fullAnalysisStr.includes('dialog');
+
+      if (hasOpenModal) {
+        this.log('warning', '⚠️ Modal already open, closing it first...');
+        // Try pressing Escape to close any open modal
+        await this.page.keyboard.press('Escape');
+        await this.page.waitForTimeout(1000);
+
+        // Try clicking outside the modal (on the backdrop)
+        try {
+          const backdrop = await this.page.$('.modal-backdrop, .modal');
+          if (backdrop) {
+            // Click at the edge to close
+            await this.page.mouse.click(10, 10);
+            await this.page.waitForTimeout(1000);
+          }
+        } catch (e) {
+          // Ignore errors from clicking backdrop
+        }
+
+        // Verify modal is closed
+        this.log('info', '🔍 Verifying modal is closed...');
+        await this.page.waitForTimeout(500);
+      }
+
       const addButtonSelector = 'button:has-text("Add influencer")';
       await this.page.waitForSelector(addButtonSelector, { timeout: 20000 });
-      await this.page.click(addButtonSelector);
+
+      // Use force click if element might be obscured
+      try {
+        await this.page.click(addButtonSelector, { timeout: 5000 });
+      } catch (clickError) {
+        this.log('warning', '⚠️ Normal click failed, trying force click...');
+        await this.page.click(addButtonSelector, { force: true });
+      }
       this.log('info', '✓ Clicked "Add influencer" button');
 
       // STEP 2: Wait for modal to open with AI verification
@@ -506,10 +582,17 @@ Respond in JSON format:
       );
 
       this.log('success', `✅ Successfully added @${username} to campaign!`);
+
+      // Ensure modal is closed before returning
+      await this.ensureModalClosed();
+
       return { success: true, username };
 
     } catch (error) {
       this.log('error', `❌ Failed to add @${username}: ${error.message}`);
+
+      // Always try to close any open modals on error
+      await this.ensureModalClosed();
 
       // Check for "already exists" via AI
       const errorCheck = await this.analyzePageWithAI('Checking if error indicates user already exists');
