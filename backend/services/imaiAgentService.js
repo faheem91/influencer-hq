@@ -8,9 +8,20 @@ class ImaiAgentService extends EventEmitter {
     this.browser = null;
     this.page = null;
     this.isRunning = false;
+    this.isStopping = false;
     this.isLoggedIn = false;
     this.openRouterKey = process.env.OPENROUTER_API_KEY;
     this.failedCreators = []; // Track failed creators for retry
+  }
+
+  /**
+   * Stop the agent gracefully
+   */
+  async stop() {
+    if (!this.isRunning) return;
+    this.log('warning', '🛑 Stop requested, finishing current operation...');
+    this.isStopping = true;
+    this.emit('stopping');
   }
 
   log(level, message, details = null) {
@@ -272,7 +283,36 @@ Respond in JSON format:
     }
   }
 
-  async addInfluencerWithAI(username) {
+  /**
+   * Check if we're still logged in, re-login if needed
+   */
+  async ensureLoggedIn(email, password) {
+    const currentUrl = this.page.url();
+
+    // Check if we're on login page
+    if (currentUrl.includes('/login') || currentUrl.includes('/signin')) {
+      this.log('warning', '⚠️ Session expired, re-logging in...');
+      this.isLoggedIn = false;
+      await this.login(email, password);
+      return true; // Indicates we had to re-login
+    }
+
+    // AI check for login state
+    const analysis = await this.analyzePageWithAI('Quick check: is login form visible?');
+    if (analysis.analysis && typeof analysis.analysis === 'object') {
+      const state = analysis.analysis.pageState || analysis.analysis.currentState || '';
+      if (state.toLowerCase().includes('login') && state.toLowerCase().includes('form')) {
+        this.log('warning', '⚠️ AI detected login page, re-logging in...');
+        this.isLoggedIn = false;
+        await this.login(email, password);
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  async addInfluencerWithAI(username, credentials, campaignId) {
     if (!this.isLoggedIn) throw new Error('Not logged in');
 
     this.log('info', `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
@@ -280,6 +320,14 @@ Respond in JSON format:
     this.log('info', `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
 
     try {
+      // CHECK: Are we still logged in?
+      const reloggedIn = await this.ensureLoggedIn(credentials.email, credentials.password);
+      if (reloggedIn) {
+        // Navigate back to campaign page
+        this.log('info', '🔄 Navigating back to campaign page...');
+        await this.navigateToCampaign(campaignId);
+      }
+
       // STEP 1: Click "Add influencer" button
       this.log('info', '📍 Step 1: Looking for "Add influencer" button...');
 
@@ -435,6 +483,12 @@ Respond in JSON format:
 
       // Process each creator
       for (let i = 0; i < creators.length; i++) {
+        // Check if stop was requested
+        if (this.isStopping) {
+          this.log('warning', '🛑 Agent stopped by user');
+          break;
+        }
+
         const creator = creators[i];
 
         // Skip invalid usernames
@@ -450,8 +504,19 @@ Respond in JSON format:
         this.log('info', `  Processing ${i + 1}/${creators.length}: @${creator.username}`);
         this.log('info', `═══════════════════════════════════════════════════`);
 
-        const result = await this.addInfluencerWithAI(creator.username);
+        const result = await this.addInfluencerWithAI(creator.username, imaiCredentials, client.imaiCampaignId);
         results.details.push(result);
+
+        // Emit progress for real-time updates
+        this.emit('progress', {
+          current: i + 1,
+          total: creators.length,
+          added: results.added + (result.success ? 1 : 0),
+          failed: results.failed + (!result.success && result.reason !== 'already_exists' ? 1 : 0),
+          skipped: results.skipped + (result.reason === 'already_exists' ? 1 : 0),
+          currentCreator: creator.username,
+          lastResult: result
+        });
 
         if (result.success) {
           results.added++;
@@ -469,22 +534,27 @@ Respond in JSON format:
         }
       }
 
-      // RETRY FAILED CREATORS
-      if (this.failedCreators.length > 0) {
+      // RETRY FAILED CREATORS (if not stopping)
+      if (this.failedCreators.length > 0 && !this.isStopping) {
         this.log('info', '');
         this.log('info', '╔══════════════════════════════════════════════════╗');
         this.log('info', '║       RETRYING FAILED CREATORS                   ║');
         this.log('info', '╚══════════════════════════════════════════════════╝');
         this.log('info', `Retrying ${this.failedCreators.length} failed creators...`);
 
-        // Refresh the page before retry
-        await this.page.reload({ waitUntil: 'networkidle' });
-        await this.page.waitForTimeout(5000);
+        // Re-login and navigate back to campaign
+        await this.ensureLoggedIn(imaiCredentials.email, imaiCredentials.password);
+        await this.navigateToCampaign(client.imaiCampaignId);
 
         for (const username of [...this.failedCreators]) {
+          if (this.isStopping) {
+            this.log('warning', '🛑 Agent stopped by user during retry');
+            break;
+          }
+
           this.log('info', `🔄 Retry attempt: @${username}`);
 
-          const retryResult = await this.addInfluencerWithAI(username);
+          const retryResult = await this.addInfluencerWithAI(username, imaiCredentials, client.imaiCampaignId);
 
           if (retryResult.success) {
             // Update results
@@ -497,6 +567,17 @@ Respond in JSON format:
             if (existingIndex >= 0) {
               results.details[existingIndex] = retryResult;
             }
+
+            // Emit progress
+            this.emit('progress', {
+              current: results.added + results.skipped + results.failed,
+              total: creators.length,
+              added: results.added,
+              failed: results.failed,
+              skipped: results.skipped,
+              currentCreator: username,
+              isRetry: true
+            });
           }
 
           await this.page.waitForTimeout(30000);
@@ -516,6 +597,7 @@ Respond in JSON format:
       throw error;
     } finally {
       this.isRunning = false;
+      this.isStopping = false;
       await this.cleanup();
     }
 

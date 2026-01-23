@@ -10,14 +10,32 @@ export interface TerminalLog {
 }
 
 interface SSEMessage {
-  type: "log" | "status" | "connected";
+  type: "log" | "status" | "connected" | "progress";
   timestamp?: string;
-  level?: "info" | "success" | "error" | "warning";
+  level?: "info" | "success" | "error" | "warning" | "ai";
   message?: string;
   details?: string | Record<string, unknown>;
-  status?: "starting" | "completed" | "error" | "stopped";
+  status?: "starting" | "completed" | "error" | "stopped" | "stopping";
   error?: string;
   result?: unknown;
+  // Progress fields
+  current?: number;
+  total?: number;
+  added?: number;
+  failed?: number;
+  skipped?: number;
+  currentCreator?: string;
+  isRetry?: boolean;
+}
+
+export interface AgentProgress {
+  current: number;
+  total: number;
+  added: number;
+  failed: number;
+  skipped: number;
+  currentCreator?: string;
+  isRetry?: boolean;
 }
 
 interface UseAgentStreamOptions {
@@ -33,8 +51,9 @@ export function useAgentStream(
 
   const [logs, setLogs] = useState<TerminalLog[]>([]);
   const [isConnected, setIsConnected] = useState(false);
-  const [agentStatus, setAgentStatus] = useState<"idle" | "running" | "error" | "completed">("idle");
+  const [agentStatus, setAgentStatus] = useState<"idle" | "running" | "error" | "completed" | "stopping">("idle");
   const [error, setError] = useState<string | null>(null);
+  const [progress, setProgress] = useState<AgentProgress | null>(null);
 
   const eventSourceRef = useRef<EventSource | null>(null);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -73,7 +92,7 @@ export function useAgentStream(
         if (data.type === "log" && data.level && data.message) {
           const log: TerminalLog = {
             timestamp: data.timestamp || new Date().toISOString(),
-            level: data.level,
+            level: data.level === "ai" ? "info" : data.level,
             message: data.message,
             details: data.details,
           };
@@ -81,10 +100,23 @@ export function useAgentStream(
           setLogs((prev) => [...prev, log]);
         }
 
+        if (data.type === "progress") {
+          setProgress({
+            current: data.current || 0,
+            total: data.total || 0,
+            added: data.added || 0,
+            failed: data.failed || 0,
+            skipped: data.skipped || 0,
+            currentCreator: data.currentCreator,
+            isRetry: data.isRetry,
+          });
+        }
+
         if (data.type === "status") {
           switch (data.status) {
             case "starting":
               setAgentStatus("running");
+              setProgress(null); // Reset progress
               break;
             case "completed":
               setAgentStatus("completed");
@@ -94,6 +126,9 @@ export function useAgentStream(
               if (data.error) {
                 setError(data.error);
               }
+              break;
+            case "stopping":
+              setAgentStatus("stopping");
               break;
             case "stopped":
               setAgentStatus("idle");
@@ -152,15 +187,21 @@ export function useAgentStream(
     };
   }, [autoConnect, connect, disconnect]);
 
+  const resetProgress = useCallback(() => {
+    setProgress(null);
+  }, []);
+
   return {
     logs,
     isConnected,
     agentStatus,
     error,
+    progress,
     connect,
     disconnect,
     clearLogs,
     addLog,
+    resetProgress,
   };
 }
 

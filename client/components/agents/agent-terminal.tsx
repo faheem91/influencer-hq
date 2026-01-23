@@ -4,19 +4,21 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Play, Square, Terminal, Clock, RefreshCw } from "lucide-react";
+import { Progress } from "@/components/ui/progress";
+import { Play, Square, Terminal, Clock, RefreshCw, CheckCircle2, XCircle, SkipForward, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { TerminalLog } from "@/hooks/useAgentStream";
+import { TerminalLog, AgentProgress } from "@/hooks/useAgentStream";
 
 interface AgentTerminalProps {
   agentId: string;
   clientName: string;
-  status: "idle" | "running" | "error" | "paused";
+  status: "idle" | "running" | "error" | "paused" | "stopping";
   nextRun?: string;
   onRunNow: () => void;
   onStop: () => void;
   logs: TerminalLog[];
   isConnected: boolean;
+  progress?: AgentProgress | null;
 }
 
 export function AgentTerminal({
@@ -28,6 +30,7 @@ export function AgentTerminal({
   onStop,
   logs,
   isConnected,
+  progress,
 }: AgentTerminalProps) {
   const terminalRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
@@ -95,6 +98,8 @@ export function AgentTerminal({
     switch (status) {
       case "running":
         return "default" as const;
+      case "stopping":
+        return "secondary" as const;
       case "error":
         return "destructive" as const;
       case "paused":
@@ -103,6 +108,10 @@ export function AgentTerminal({
         return "outline" as const;
     }
   };
+
+  const progressPercent = progress && progress.total > 0
+    ? Math.round((progress.current / progress.total) * 100)
+    : 0;
 
   return (
     <Card className="overflow-hidden border-zinc-800 bg-zinc-950">
@@ -137,15 +146,25 @@ export function AgentTerminal({
           </Badge>
 
           {/* Action buttons */}
-          {status === "running" ? (
+          {status === "running" || status === "stopping" ? (
             <Button
               variant="destructive"
               size="sm"
               onClick={onStop}
+              disabled={status === "stopping"}
               className="h-7 px-2"
             >
-              <Square className="mr-1 h-3 w-3" />
-              Stop
+              {status === "stopping" ? (
+                <>
+                  <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                  Stopping...
+                </>
+              ) : (
+                <>
+                  <Square className="mr-1 h-3 w-3" />
+                  Stop
+                </>
+              )}
             </Button>
           ) : (
             <Button
@@ -160,6 +179,49 @@ export function AgentTerminal({
           )}
         </div>
       </CardHeader>
+
+      {/* Progress Bar and Counters */}
+      {progress && (status === "running" || status === "stopping") && (
+        <div className="border-b border-zinc-800 bg-zinc-900/50 px-4 py-3">
+          {/* Progress bar */}
+          <div className="mb-3">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-xs text-zinc-400">
+                Processing {progress.current} of {progress.total} creators
+                {progress.currentCreator && (
+                  <span className="text-zinc-500"> • @{progress.currentCreator}</span>
+                )}
+                {progress.isRetry && (
+                  <Badge variant="outline" className="ml-2 text-yellow-500 border-yellow-500 text-[10px] px-1 py-0">
+                    RETRY
+                  </Badge>
+                )}
+              </span>
+              <span className="text-xs text-zinc-500">{progressPercent}%</span>
+            </div>
+            <Progress value={progressPercent} className="h-1.5 bg-zinc-800" />
+          </div>
+
+          {/* Counters */}
+          <div className="flex items-center gap-6 text-xs">
+            <div className="flex items-center gap-1.5">
+              <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
+              <span className="text-zinc-400">Added:</span>
+              <span className="text-green-400 font-semibold">{progress.added}</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <XCircle className="h-3.5 w-3.5 text-red-500" />
+              <span className="text-zinc-400">Failed:</span>
+              <span className="text-red-400 font-semibold">{progress.failed}</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <SkipForward className="h-3.5 w-3.5 text-yellow-500" />
+              <span className="text-zinc-400">Skipped:</span>
+              <span className="text-yellow-400 font-semibold">{progress.skipped}</span>
+            </div>
+          </div>
+        </div>
+      )}
 
       <CardContent className="p-0">
         {/* Terminal output */}

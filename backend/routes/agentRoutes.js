@@ -34,6 +34,29 @@ imaiAgentService.on('log', (logEntry) => {
   }
 });
 
+// Forward progress events for real-time counters
+imaiAgentService.on('progress', (progressData) => {
+  for (const [agentId] of sseConnections) {
+    broadcastToAgent(agentId, {
+      type: 'progress',
+      ...progressData,
+      timestamp: new Date().toISOString(),
+    });
+  }
+});
+
+// Forward stopping event
+imaiAgentService.on('stopping', () => {
+  for (const [agentId] of sseConnections) {
+    broadcastToAgent(agentId, {
+      type: 'status',
+      status: 'stopping',
+      timestamp: new Date().toISOString(),
+      message: 'Agent is stopping...',
+    });
+  }
+});
+
 /**
  * GET /api/agents/:id/stream
  * SSE endpoint for real-time agent logs
@@ -147,31 +170,47 @@ router.post('/api/agents/:id/run', async (req, res) => {
 
 /**
  * POST /api/agents/:id/stop
- * Stop a running agent
+ * Stop a running agent gracefully
  */
 router.post('/api/agents/:id/stop', async (req, res) => {
   const agentId = req.params.id;
 
   try {
     // Stop the scheduler
-    const stopped = agentScheduler.stopAgent(agentId);
+    const schedulerStopped = agentScheduler.stopAgent(agentId);
 
-    // Cleanup the IMAI service
-    await imaiAgentService.cleanup();
+    // Gracefully stop the IMAI agent (allows current operation to finish)
+    await imaiAgentService.stop();
 
-    // Broadcast stop
+    // Broadcast stop initiated
     broadcastToAgent(agentId, {
       type: 'status',
-      status: 'stopped',
+      status: 'stopping',
       timestamp: new Date().toISOString(),
-      message: 'Agent manually stopped',
+      message: 'Stop requested - finishing current operation...',
     });
 
     res.json({
       success: true,
-      wasStopped: stopped,
+      wasStopped: true,
+      schedulerStopped,
+      message: 'Agent will stop after current operation completes',
     });
   } catch (error) {
+    // If graceful stop fails, force cleanup
+    try {
+      await imaiAgentService.cleanup();
+    } catch (cleanupError) {
+      console.error('Force cleanup also failed:', cleanupError);
+    }
+
+    broadcastToAgent(agentId, {
+      type: 'status',
+      status: 'stopped',
+      timestamp: new Date().toISOString(),
+      message: 'Agent force stopped due to error',
+    });
+
     res.status(500).json({
       success: false,
       error: error.message,

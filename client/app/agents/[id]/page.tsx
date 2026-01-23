@@ -44,7 +44,7 @@ export default function AgentDetailPage() {
   const agentId = params.id as string;
 
   // SSE connection for real-time logs
-  const { logs: streamLogs, isConnected, clearLogs, addLog } = useAgentStream(agentId);
+  const { logs: streamLogs, isConnected, clearLogs, addLog, progress, agentStatus: streamStatus } = useAgentStream(agentId);
 
   const loadData = () => {
     startTransition(async () => {
@@ -277,12 +277,13 @@ export default function AgentDetailPage() {
         <AgentTerminal
           agentId={agentId}
           clientName={agent.clientName}
-          status={isRunning ? "running" : agent.status}
+          status={streamStatus === "stopping" ? "stopping" : isRunning ? "running" : agent.status}
           nextRun={getNextRunTime()}
           onRunNow={handleRunNow}
           onStop={handleStop}
           logs={streamLogs}
           isConnected={isConnected}
+          progress={progress}
         />
 
         {/* Agent Info */}
