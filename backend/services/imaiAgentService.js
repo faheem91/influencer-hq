@@ -478,7 +478,18 @@ Respond in JSON format:
   }
 
   async runAgentForClient(client, imaiCredentials, creators) {
+    // Force reset if somehow stuck in running state without browser
+    if (this.isRunning && !this.browser) {
+      this.log('warning', '⚠️ Resetting stale running state (no browser found)');
+      this.isRunning = false;
+    }
+
+    if (this.isRunning) {
+      throw new Error('Agent is already running');
+    }
+
     this.isRunning = true;
+    this.isStopping = false;
     this.failedCreators = [];
 
     const results = {
@@ -496,7 +507,7 @@ Respond in JSON format:
       this.log('info', `Client: ${client.name}`);
       this.log('info', `Campaign: ${client.imaiCampaignId}`);
       this.log('info', `Creators to add: ${creators.length}`);
-      this.log('info', `AI Model: GPT-4o-mini via OpenRouter`);
+      this.log('info', `AI Model: ${this.openRouterModel}`);
       this.log('info', '');
 
       // Initialize
@@ -643,6 +654,8 @@ Respond in JSON format:
         this.browser = null;
       }
       this.isLoggedIn = false;
+      this.isRunning = false;
+      this.isStopping = false;
       this.log('success', 'Cleanup complete');
     } catch (error) {
       this.log('error', 'Cleanup error', { error: error.message });
