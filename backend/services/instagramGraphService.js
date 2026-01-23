@@ -1,4 +1,5 @@
 const axios = require('axios');
+const instagramPrivateService = require('./instagramService');
 
 class InstagramGraphService {
   constructor() {
@@ -140,6 +141,9 @@ class InstagramGraphService {
   async searchHashtag(hashtag) {
     await this.initialize();
 
+    // Remove # if present - define outside try for catch block access
+    const cleanHashtag = hashtag.replace(/^#/, '');
+
     // Basic Display API doesn't support hashtag search
     if (this.apiType === 'basic') {
       console.log(`⚠️  Hashtag search not available with Basic Display API`);
@@ -149,8 +153,6 @@ class InstagramGraphService {
     }
 
     try {
-      // Remove # if present
-      const cleanHashtag = hashtag.replace(/^#/, '');
       console.log(`🔍 Searching hashtag: #${cleanHashtag}`);
 
       // Use page access token for Business API calls
@@ -192,6 +194,20 @@ class InstagramGraphService {
       // Check for specific API errors
       if (error.response?.data?.error?.code === 24) {
         console.log('   Note: Hashtag search limit reached (30 unique hashtags per 7 days)');
+      }
+
+      // Error code 10: Instagram Public Content Access required - fallback to private API
+      if (error.response?.data?.error?.code === 10) {
+        console.log('   ⚠️  Graph API requires "Instagram Public Content Access" permission');
+        console.log('   🔄 Falling back to private API for hashtag search...');
+        try {
+          const results = await instagramPrivateService.searchByHashtag(cleanHashtag);
+          console.log(`   ✅ Private API found ${results.length} posts`);
+          return results;
+        } catch (privateError) {
+          console.error('   ❌ Private API fallback failed:', privateError.message);
+          throw error; // Throw original Graph API error
+        }
       }
 
       throw error;
@@ -283,10 +299,17 @@ class InstagramGraphService {
         return response.data.data || [];
       }
 
-      // For other users, we can't directly fetch their media with Graph API
-      // Return empty with a note
-      console.log(`   Note: Graph API cannot fetch media from other users directly`);
-      return [];
+      // For other users, fall back to private API
+      console.log(`   Graph API cannot fetch media from other users directly`);
+      console.log(`   🔄 Falling back to private API for user search...`);
+      try {
+        const results = await instagramPrivateService.searchByUsername(username);
+        console.log(`   ✅ Private API found ${results.length} posts`);
+        return results;
+      } catch (privateError) {
+        console.error('   ❌ Private API fallback failed:', privateError.message);
+        return [];
+      }
     } catch (error) {
       console.error(`❌ User media fetch failed:`, error.response?.data || error.message);
       throw error;
