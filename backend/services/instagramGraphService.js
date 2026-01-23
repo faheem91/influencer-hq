@@ -203,7 +203,8 @@ class InstagramGraphService {
         try {
           const results = await instagramPrivateService.searchByHashtag(cleanHashtag);
           console.log(`   ✅ Private API found ${results.length} posts`);
-          return results;
+          // Transform private API format to Graph API format for client compatibility
+          return results.map(post => this.transformPrivateApiPost(post, cleanHashtag));
         } catch (privateError) {
           console.error('   ❌ Private API fallback failed:', privateError.message);
           throw error; // Throw original Graph API error
@@ -305,7 +306,8 @@ class InstagramGraphService {
       try {
         const results = await instagramPrivateService.searchByUsername(username);
         console.log(`   ✅ Private API found ${results.length} posts`);
-        return results;
+        // Transform private API format to Graph API format for client compatibility
+        return results.map(post => this.transformPrivateApiPost(post, `@${username}`));
       } catch (privateError) {
         console.error('   ❌ Private API fallback failed:', privateError.message);
         return [];
@@ -357,6 +359,44 @@ class InstagramGraphService {
       source: {
         type: 'hashtag',
         value: sourceHashtag,
+      }
+    };
+  }
+
+  /**
+   * Transform private API post format to Graph API format for client compatibility
+   * Private API returns: { postId, content: { caption, displayUrl }, creator: { username, fullName, profilePicUrl }, engagement: { likes, comments } }
+   * Client expects: { id, caption, mediaUrl, creator: { username, fullName, profilePicUrl }, engagement: { likes, comments }, source: { type, value } }
+   */
+  transformPrivateApiPost(post, sourceValue = '') {
+    const isHashtag = sourceValue.startsWith('#') || !sourceValue.startsWith('@');
+    return {
+      id: post.postId || post.shortcode,
+      shortcode: post.shortcode,
+      caption: post.content?.caption || '',
+      mediaType: post.content?.mediaType || 'IMAGE',
+      mediaUrl: post.content?.displayUrl || post.content?.thumbnailUrl || null,
+      permalink: post.permalink,
+      timestamp: post.date || new Date(post.timestamp * 1000).toISOString(),
+      takenAt: post.timestamp,
+
+      // Creator info - already in correct format
+      creator: {
+        username: post.creator?.username || 'unknown',
+        fullName: post.creator?.fullName || '',
+        profilePicUrl: post.creator?.profilePicUrl || null,
+      },
+
+      // Engagement - already in correct format
+      engagement: {
+        likes: post.engagement?.likes || 0,
+        comments: post.engagement?.comments || 0,
+      },
+
+      // Source tracking
+      source: {
+        type: isHashtag ? 'hashtag' : 'user',
+        value: sourceValue,
       }
     };
   }
