@@ -51,6 +51,91 @@ class ImaiAgentService extends EventEmitter {
   }
 
   /**
+   * Check if the AI response indicates a login page
+   */
+  isLoginPageFromAnalysis(analysis) {
+    if (!analysis) return false;
+
+    let textToCheck = '';
+
+    if (typeof analysis === 'object' && analysis !== null) {
+      // Check pageState, currentState, and stringify the whole thing
+      textToCheck = [
+        analysis.pageState || '',
+        analysis.currentState || '',
+        JSON.stringify(analysis)
+      ].join(' ').toLowerCase();
+    } else if (typeof analysis === 'string') {
+      textToCheck = analysis.toLowerCase();
+    }
+
+    const loginKeywords = [
+      'login',
+      'log in',
+      'sign in',
+      'signin',
+      'password field',
+      'email and password',
+      'enter your email',
+      'enter your password',
+      'authentication',
+      'credentials'
+    ];
+
+    return loginKeywords.some(keyword => textToCheck.includes(keyword));
+  }
+
+  /**
+   * Check if influencer already exists in the campaign (by looking at page content)
+   */
+  async checkInfluencerExistsInCampaign(username) {
+    try {
+      // Normalize username (remove @)
+      const cleanUsername = username.replace('@', '').toLowerCase();
+
+      // Check if the username appears in the page content
+      const pageContent = await this.page.content();
+      const pageContentLower = pageContent.toLowerCase();
+
+      // Look for the username in the page (it would appear in the influencers table)
+      if (pageContentLower.includes(cleanUsername)) {
+        // Double-check with a more specific selector
+        const existingInfluencer = await this.page.$(`text=${cleanUsername}`);
+        if (existingInfluencer) {
+          this.log('info', `🔍 Found "${cleanUsername}" in page content, checking if it's in influencer list...`);
+
+          // Use AI to verify
+          const verifyResult = await this.analyzePageWithAI(
+            `Check if the influencer @${cleanUsername} already exists in the campaign participants list`,
+            `The influencer @${cleanUsername} is visible in the participants/influencers list`
+          );
+
+          if (verifyResult.success && verifyResult.analysis) {
+            const analysis = verifyResult.analysis;
+            if (typeof analysis === 'object' && analysis.isExpectedState) {
+              return true;
+            }
+            // Also check the text response
+            const responseText = JSON.stringify(analysis).toLowerCase();
+            if (responseText.includes('already') ||
+                responseText.includes('exists') ||
+                responseText.includes('found') ||
+                responseText.includes('visible in') ||
+                responseText.includes('participant')) {
+              return true;
+            }
+          }
+        }
+      }
+
+      return false;
+    } catch (error) {
+      this.log('warning', `Error checking if influencer exists: ${error.message}`);
+      return false;
+    }
+  }
+
+  /**
    * Take a screenshot and get AI analysis of the current page state
    */
   async analyzePageWithAI(context, expectedState = null) {
@@ -311,41 +396,96 @@ Respond in JSON format:
    * Close any open modals to reset page state
    */
   async ensureModalClosed() {
-    try {
-      // Check if modal is visible
-      const modal = await this.page.$('modal-container, .modal.show, [role="dialog"]');
-      if (modal) {
-        this.log('info', '🔄 Closing open modal...');
+    const maxAttempts = 5;
 
-        // Try Escape key first
-        await this.page.keyboard.press('Escape');
-        await this.page.waitForTimeout(500);
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        // Check if modal is visible - use multiple selectors for Angular/Bootstrap modals
+        const modal = await this.page.$('modal-container.show, modal-container.modal, .modal.show, .modal.fade.show, [role="dialog"][aria-modal="true"]');
 
-        // Check if still open
-        const stillOpen = await this.page.$('modal-container, .modal.show');
-        if (stillOpen) {
-          // Try clicking outside
-          await this.page.mouse.click(10, 10);
-          await this.page.waitForTimeout(500);
+        if (!modal) {
+          if (attempt > 1) {
+            this.log('info', '✓ Modal closed successfully');
+          }
+          return true;
         }
 
-        // Try clicking any close/cancel button
+        this.log('info', `🔄 Closing open modal (attempt ${attempt}/${maxAttempts})...`);
+
+        // Attempt 1: Try clicking Cancel/Close/No button first (inside modal)
         try {
-          const closeBtn = await this.page.$('button.close, button[aria-label="Close"], .btn-close, button:has-text("Cancel"), button:has-text("No")');
-          if (closeBtn) {
-            await closeBtn.click();
-            await this.page.waitForTimeout(500);
+          const closeButtons = [
+            'modal-container button:has-text("Cancel")',
+            'modal-container button:has-text("No")',
+            'modal-container button:has-text("Close")',
+            'modal-container .close',
+            'modal-container .btn-close',
+            'modal-container button[aria-label="Close"]',
+            '.modal.show button:has-text("Cancel")',
+            '.modal.show button:has-text("No")',
+            '.modal.show .close',
+          ];
+
+          for (const selector of closeButtons) {
+            const btn = await this.page.$(selector);
+            if (btn) {
+              await btn.click();
+              this.log('info', `  → Clicked close button: ${selector}`);
+              await this.page.waitForTimeout(1000);
+              break;
+            }
           }
         } catch (e) {
-          // Ignore
+          // Continue to next approach
         }
 
-        this.log('info', '✓ Modal cleanup complete');
+        // Check if closed
+        const stillOpen1 = await this.page.$('modal-container.show, modal-container.modal, .modal.show');
+        if (!stillOpen1) continue;
+
+        // Attempt 2: Try Escape key
+        this.log('info', '  → Pressing Escape key...');
+        await this.page.keyboard.press('Escape');
+        await this.page.waitForTimeout(1000);
+
+        // Check if closed
+        const stillOpen2 = await this.page.$('modal-container.show, modal-container.modal, .modal.show');
+        if (!stillOpen2) continue;
+
+        // Attempt 3: Click on backdrop (modal-backdrop)
+        try {
+          this.log('info', '  → Clicking modal backdrop...');
+          const backdrop = await this.page.$('.modal-backdrop');
+          if (backdrop) {
+            await backdrop.click({ position: { x: 5, y: 5 } });
+            await this.page.waitForTimeout(1000);
+          }
+        } catch (e) {
+          // Continue
+        }
+
+        // Check if closed
+        const stillOpen3 = await this.page.$('modal-container.show, modal-container.modal, .modal.show');
+        if (!stillOpen3) continue;
+
+        // Attempt 4: Click far outside modal
+        this.log('info', '  → Clicking outside modal area...');
+        await this.page.mouse.click(1, 1);
+        await this.page.waitForTimeout(1000);
+
+      } catch (e) {
+        this.log('warning', `Modal cleanup error on attempt ${attempt}: ${e.message}`);
       }
-    } catch (e) {
-      // Ignore errors during modal cleanup
-      this.log('warning', `Modal cleanup error (ignored): ${e.message}`);
     }
+
+    // Final check - if modal still open after all attempts, log warning
+    const finalCheck = await this.page.$('modal-container.show, modal-container.modal, .modal.show');
+    if (finalCheck) {
+      this.log('warning', '⚠️ Modal could not be closed after all attempts. Will refresh page.');
+      return false;
+    }
+
+    return true;
   }
 
   /**
@@ -365,31 +505,31 @@ Respond in JSON format:
 
     // AI check for login state
     const result = await this.analyzePageWithAI('Quick check: is this a login page with username/email and password fields?');
-    const analysis = result.analysis;
 
-    // Check pageState directly if it's an object
-    let pageStateStr = '';
-    if (typeof analysis === 'object' && analysis !== null) {
-      pageStateStr = (analysis.pageState || analysis.currentState || '').toLowerCase();
-    } else if (typeof analysis === 'string') {
-      pageStateStr = analysis.toLowerCase();
-    }
-
-    const fullAnalysisStr = JSON.stringify(analysis || '').toLowerCase();
-
-    const isLoginPage = pageStateStr.includes('login') ||
-                        pageStateStr.includes('password') ||
-                        pageStateStr.includes('sign in') ||
-                        fullAnalysisStr.includes('"login') ||
-                        fullAnalysisStr.includes('password field');
-
-    if (isLoginPage) {
-      this.log('warning', `⚠️ AI detected login page (pageState: "${pageStateStr}"), re-logging in...`);
+    // Use the helper method for consistent login detection
+    if (this.isLoginPageFromAnalysis(result.analysis)) {
+      this.log('warning', '⚠️ AI detected login page, re-logging in...');
       this.isLoggedIn = false;
       await this.login(email, password);
       return true;
     }
 
+    return false;
+  }
+
+  /**
+   * Helper to handle login page detection and re-login
+   * Call this after ANY AI analysis to check if we got logged out
+   */
+  async handleLoginIfDetected(analysis, credentials, campaignId) {
+    if (this.isLoginPageFromAnalysis(analysis)) {
+      this.log('warning', '⚠️ LOGIN PAGE DETECTED! Re-logging in...');
+      this.isLoggedIn = false;
+      await this.login(credentials.email, credentials.password);
+      this.log('info', '✅ Re-login complete, navigating back to campaign...');
+      await this.navigateToCampaign(campaignId);
+      return true;
+    }
     return false;
   }
 
@@ -401,10 +541,18 @@ Respond in JSON format:
     this.log('info', `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
 
     try {
-      // CHECK: Are we still logged in?
+      // PRE-CHECK: Does this influencer already exist in the campaign?
+      this.log('info', '📍 Pre-check: Checking if influencer already exists...');
+      const alreadyExists = await this.checkInfluencerExistsInCampaign(username);
+      if (alreadyExists) {
+        this.log('warning', `⏭️ @${username} already exists in campaign - skipping`);
+        return { success: false, username, reason: 'already_exists' };
+      }
+      this.log('info', `✓ @${username} not found in campaign, proceeding to add...`);
+
+      // CHECK: Are we still logged in? (URL-based check)
       const reloggedIn = await this.ensureLoggedIn(credentials.email, credentials.password);
       if (reloggedIn) {
-        // Navigate back to campaign page
         this.log('info', '🔄 Navigating back to campaign page...');
         await this.navigateToCampaign(campaignId);
       }
@@ -415,67 +563,52 @@ Respond in JSON format:
       // First verify the page state - check if we're still logged in
       let pageAnalysis = await this.analyzePageWithAI('Checking if Add influencer button is visible or if login form is shown');
 
-      // Check if AI detected login page - check pageState directly AND stringify as fallback
-      const analysis = pageAnalysis.analysis;
-      let pageStateStr = '';
-
-      this.log('info', `🔍 Analysis type: ${typeof analysis}, success: ${pageAnalysis.success}`);
-
-      if (typeof analysis === 'object' && analysis !== null) {
-        // Get pageState or currentState directly
-        pageStateStr = (analysis.pageState || analysis.currentState || '').toLowerCase();
-        this.log('info', `🔍 AI pageState: "${pageStateStr}"`);
-      } else if (typeof analysis === 'string') {
-        pageStateStr = analysis.toLowerCase();
-        this.log('info', `🔍 AI response (string): "${pageStateStr.substring(0, 100)}"`);
-      } else {
-        this.log('warning', `🔍 Unexpected analysis type: ${JSON.stringify(analysis)}`);
-      }
-
-      // Also check JSON stringified version as backup
-      const fullAnalysisStr = JSON.stringify(analysis || '').toLowerCase();
-
-      const isLoginPage = pageStateStr.includes('login') ||
-                          pageStateStr.includes('password') ||
-                          pageStateStr.includes('sign in') ||
-                          fullAnalysisStr.includes('"login') ||
-                          fullAnalysisStr.includes('password field') ||
-                          fullAnalysisStr.includes('email and password');
-
-      this.log('info', `🔍 Login page detected: ${isLoginPage}`);
-
-      if (isLoginPage) {
-        this.log('warning', '⚠️ LOGIN PAGE DETECTED! Re-logging in...');
-        this.isLoggedIn = false;
-        await this.login(credentials.email, credentials.password);
-        this.log('info', '✅ Re-login complete, navigating back to campaign...');
-        await this.navigateToCampaign(campaignId);
-        // Re-verify we're now on the right page
+      // CRITICAL: Check if AI detected a login page and handle it
+      if (await this.handleLoginIfDetected(pageAnalysis.analysis, credentials, campaignId)) {
+        // We re-logged in, now re-verify the page
         this.log('info', '🔍 Verifying page after re-login...');
         pageAnalysis = await this.analyzePageWithAI('Verifying Add influencer button is now visible after re-login');
+
+        // If STILL showing login, something is wrong
+        if (this.isLoginPageFromAnalysis(pageAnalysis.analysis)) {
+          throw new Error('Login failed - still showing login page after re-login attempt');
+        }
       }
+
+      // Extract page state for modal check
+      const analysis = pageAnalysis.analysis;
+      let pageStateStr = '';
+      if (typeof analysis === 'object' && analysis !== null) {
+        pageStateStr = (analysis.pageState || analysis.currentState || '').toLowerCase();
+      } else if (typeof analysis === 'string') {
+        pageStateStr = analysis.toLowerCase();
+      }
+      const fullAnalysisStr = JSON.stringify(analysis || '').toLowerCase();
 
       // Check if a modal is already open (from previous operation)
       const hasOpenModal = pageStateStr.includes('modal') ||
                            fullAnalysisStr.includes('modal') ||
                            fullAnalysisStr.includes('dialog');
 
-      if (hasOpenModal) {
-        this.log('warning', '⚠️ Modal already open, closing it first...');
-        // Try pressing Escape to close any open modal
-        await this.page.keyboard.press('Escape');
-        await this.page.waitForTimeout(1000);
+      // Also check DOM directly for modal
+      const domModalOpen = await this.page.$('modal-container.show, modal-container.modal, .modal.show, .modal.fade.show');
 
-        // Try clicking outside the modal (on the backdrop)
-        try {
-          const backdrop = await this.page.$('.modal-backdrop, .modal');
-          if (backdrop) {
-            // Click at the edge to close
-            await this.page.mouse.click(10, 10);
-            await this.page.waitForTimeout(1000);
+      if (hasOpenModal || domModalOpen) {
+        this.log('warning', '⚠️ Modal already open, closing it first...');
+
+        const modalClosed = await this.ensureModalClosed();
+
+        if (!modalClosed) {
+          // Modal couldn't be closed, refresh the page
+          this.log('info', '🔄 Refreshing page to clear stuck modal...');
+          await this.page.reload({ waitUntil: 'networkidle', timeout: 30000 });
+          await this.page.waitForTimeout(2000);
+
+          // Navigate back to campaign if needed
+          const currentUrl = this.page.url();
+          if (!currentUrl.includes(`/campaigns/influencers/${campaignId}`)) {
+            await this.navigateToCampaign(campaignId);
           }
-        } catch (e) {
-          // Ignore errors from clicking backdrop
         }
 
         // Verify modal is closed
@@ -596,7 +729,26 @@ Respond in JSON format:
       this.log('error', `❌ Failed to add @${username}: ${error.message}`);
 
       // Always try to close any open modals on error
-      await this.ensureModalClosed();
+      const modalClosed = await this.ensureModalClosed();
+
+      // If modal couldn't be closed, refresh the page
+      if (!modalClosed) {
+        this.log('info', '🔄 Refreshing page to reset state...');
+        try {
+          await this.page.reload({ waitUntil: 'networkidle', timeout: 30000 });
+          await this.page.waitForTimeout(2000);
+
+          // Check if we're still on the campaign page, navigate if needed
+          const currentUrl = this.page.url();
+          if (!currentUrl.includes(`/campaigns/influencers/${campaignId}`)) {
+            await this.navigateToCampaign(campaignId);
+          }
+
+          this.log('info', '✓ Page refreshed and ready for next creator');
+        } catch (refreshError) {
+          this.log('warning', `Page refresh failed: ${refreshError.message}`);
+        }
+      }
 
       // Check for "already exists" via AI
       const errorCheck = await this.analyzePageWithAI('Checking if error indicates user already exists');

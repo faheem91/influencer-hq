@@ -17,6 +17,7 @@ import {
   getImaiCredentials,
   getCreators,
   getOpenRouterSettings,
+  updateCreatorsAdded,
 } from "@/db/queries";
 import {
   useAgentStream,
@@ -159,6 +160,12 @@ export default function AgentDetailPage() {
           message: "Agent run completed successfully",
           details: result.result as Record<string, unknown> | undefined,
         });
+
+        // Update creators added count in database
+        const runResult = result.result as { added?: number } | undefined;
+        if (runResult?.added && runResult.added > 0) {
+          await updateCreatorsAdded(agent.id, runResult.added);
+        }
 
         // Log to database
         await addAgentLog(agent.id, {

@@ -117,6 +117,23 @@ export async function incrementCreatorsAdded(id: string): Promise<Agent | undefi
   return result[0];
 }
 
+export async function updateCreatorsAdded(id: string, addedCount: number): Promise<Agent | undefined> {
+  if (addedCount <= 0) return await getAgent(id);
+
+  const agent = await getAgent(id);
+  if (!agent) return undefined;
+
+  const result = await db
+    .update(agents)
+    .set({
+      creatorsAdded: agent.creatorsAdded + addedCount,
+      updatedAt: new Date(),
+    })
+    .where(eq(agents.id, id))
+    .returning();
+  return result[0];
+}
+
 export async function deleteAgent(id: string): Promise<boolean> {
   // Get agent to find client
   const agent = await getAgent(id);
