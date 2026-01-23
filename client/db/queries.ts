@@ -299,6 +299,31 @@ export async function setImaiCredentials(email: string, password: string): Promi
   await setSetting("imai_password", password);
 }
 
+// ============= OpenRouter Settings =============
+
+export interface OpenRouterSettings {
+  apiKey: string;
+  model: string;
+}
+
+export async function getOpenRouterSettings(): Promise<OpenRouterSettings | null> {
+  const apiKey = await getSetting("openrouter_api_key");
+  const model = await getSetting("openrouter_model");
+
+  if (apiKey) {
+    return {
+      apiKey,
+      model: model || "openai/gpt-4o-mini",
+    };
+  }
+  return null;
+}
+
+export async function setOpenRouterSettings(apiKey: string, model: string): Promise<void> {
+  await setSetting("openrouter_api_key", apiKey);
+  await setSetting("openrouter_model", model);
+}
+
 // ============= Creator Discovery =============
 
 interface InstagramPost {

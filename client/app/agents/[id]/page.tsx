@@ -16,6 +16,7 @@ import {
   addAgentLog,
   getImaiCredentials,
   getCreators,
+  getOpenRouterSettings,
 } from "@/db/queries";
 import {
   useAgentStream,
@@ -106,6 +107,16 @@ export default function AgentDetailPage() {
       return;
     }
 
+    // Get OpenRouter settings
+    const openRouterSettings = await getOpenRouterSettings();
+    if (!openRouterSettings) {
+      addLog({
+        timestamp: new Date().toISOString(),
+        level: "warning",
+        message: "OpenRouter API key not configured. Using server default.",
+      });
+    }
+
     // Get creators to add
     const creators = await getCreators(client.id);
     const creatorsToAdd = creators.filter((c) => !c.addedToImai);
@@ -138,6 +149,7 @@ export default function AgentDetailPage() {
         },
         imaiCredentials: credentials,
         creators: creatorsToAdd.map((c) => ({ username: c.username })),
+        openRouterSettings: openRouterSettings || undefined,
       });
 
       if (result.success) {

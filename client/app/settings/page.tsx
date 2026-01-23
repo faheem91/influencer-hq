@@ -8,8 +8,18 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
-import { getClients, getAgents, getCreators, getImaiCredentials, setImaiCredentials } from "@/db/queries";
-import { Download, Upload, Trash2, Key, Bell, Database, Check, Loader2 } from "lucide-react";
+import { getClients, getAgents, getCreators, getImaiCredentials, setImaiCredentials, getOpenRouterSettings, setOpenRouterSettings } from "@/db/queries";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Download, Upload, Trash2, Key, Bell, Database, Check, Loader2, Bot } from "lucide-react";
+
+// Available OpenRouter models for AI vision
+const OPENROUTER_MODELS = [
+  { value: "openai/gpt-4o-mini", label: "GPT-4o Mini (Recommended)", description: "Fast and cost-effective" },
+  { value: "openai/gpt-4o", label: "GPT-4o", description: "Most capable, higher cost" },
+  { value: "anthropic/claude-3.5-sonnet", label: "Claude 3.5 Sonnet", description: "Excellent reasoning" },
+  { value: "anthropic/claude-3-haiku", label: "Claude 3 Haiku", description: "Fast and affordable" },
+  { value: "google/gemini-2.0-flash-001", label: "Gemini 2.0 Flash", description: "Google's latest fast model" },
+];
 
 export default function SettingsPage() {
   const [imaiEmail, setImaiEmail] = useState("");
@@ -20,6 +30,13 @@ export default function SettingsPage() {
   const [isSavingCredentials, setIsSavingCredentials] = useState(false);
   const [credentialsSaved, setCredentialsSaved] = useState(false);
   const [isLoadingCredentials, setIsLoadingCredentials] = useState(true);
+
+  // OpenRouter settings
+  const [openRouterKey, setOpenRouterKey] = useState("");
+  const [openRouterModel, setOpenRouterModel] = useState("openai/gpt-4o-mini");
+  const [isLoadingOpenRouter, setIsLoadingOpenRouter] = useState(true);
+  const [isSavingOpenRouter, setIsSavingOpenRouter] = useState(false);
+  const [openRouterSaved, setOpenRouterSaved] = useState(false);
 
   // Load IMAI credentials on mount
   useEffect(() => {
@@ -37,6 +54,24 @@ export default function SettingsPage() {
       }
     };
     loadCredentials();
+  }, []);
+
+  // Load OpenRouter settings on mount
+  useEffect(() => {
+    const loadOpenRouterSettings = async () => {
+      try {
+        const settings = await getOpenRouterSettings();
+        if (settings) {
+          setOpenRouterKey(settings.apiKey);
+          setOpenRouterModel(settings.model);
+        }
+      } catch (error) {
+        console.error("Error loading OpenRouter settings:", error);
+      } finally {
+        setIsLoadingOpenRouter(false);
+      }
+    };
+    loadOpenRouterSettings();
   }, []);
 
   const handleSaveCredentials = async () => {
@@ -57,6 +92,27 @@ export default function SettingsPage() {
       alert("Failed to save credentials. Please try again.");
     } finally {
       setIsSavingCredentials(false);
+    }
+  };
+
+  const handleSaveOpenRouter = async () => {
+    if (!openRouterKey) {
+      alert("Please enter an OpenRouter API key");
+      return;
+    }
+
+    setIsSavingOpenRouter(true);
+    setOpenRouterSaved(false);
+
+    try {
+      await setOpenRouterSettings(openRouterKey, openRouterModel);
+      setOpenRouterSaved(true);
+      setTimeout(() => setOpenRouterSaved(false), 3000);
+    } catch (error) {
+      console.error("Error saving OpenRouter settings:", error);
+      alert("Failed to save OpenRouter settings. Please try again.");
+    } finally {
+      setIsSavingOpenRouter(false);
     }
   };
 
@@ -156,6 +212,83 @@ export default function SettingsPage() {
                     </>
                   ) : (
                     "Save Credentials"
+                  )}
+                </Button>
+              </>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* OpenRouter AI Settings */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <Bot className="h-5 w-5" />
+              <CardTitle>AI Configuration</CardTitle>
+            </div>
+            <CardDescription>
+              Configure the AI model used for intelligent page analysis during automation. Get your API key from{" "}
+              <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" className="text-primary underline">
+                openrouter.ai/keys
+              </a>
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {isLoadingOpenRouter ? (
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading AI settings...
+              </div>
+            ) : (
+              <>
+                <div className="space-y-2">
+                  <Label htmlFor="openRouterKey">OpenRouter API Key</Label>
+                  <Input
+                    id="openRouterKey"
+                    type="password"
+                    value={openRouterKey}
+                    onChange={(e) => setOpenRouterKey(e.target.value)}
+                    placeholder="sk-or-v1-..."
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="openRouterModel">AI Model</Label>
+                  <Select value={openRouterModel} onValueChange={setOpenRouterModel}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select a model" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {OPENROUTER_MODELS.map((model) => (
+                        <SelectItem key={model.value} value={model.value}>
+                          <div className="flex flex-col">
+                            <span>{model.label}</span>
+                            <span className="text-xs text-muted-foreground">{model.description}</span>
+                          </div>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-sm text-muted-foreground">
+                    The AI analyzes screenshots to verify each step of the automation
+                  </p>
+                </div>
+                <Button
+                  onClick={handleSaveOpenRouter}
+                  disabled={isSavingOpenRouter}
+                  className={openRouterSaved ? "bg-green-600 hover:bg-green-600" : ""}
+                >
+                  {isSavingOpenRouter ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Saving...
+                    </>
+                  ) : openRouterSaved ? (
+                    <>
+                      <Check className="mr-2 h-4 w-4" />
+                      Saved!
+                    </>
+                  ) : (
+                    "Save AI Settings"
                   )}
                 </Button>
               </>

@@ -11,7 +11,22 @@ class ImaiAgentService extends EventEmitter {
     this.isStopping = false;
     this.isLoggedIn = false;
     this.openRouterKey = process.env.OPENROUTER_API_KEY;
+    this.openRouterModel = 'openai/gpt-4o-mini';
     this.failedCreators = []; // Track failed creators for retry
+  }
+
+  /**
+   * Set OpenRouter configuration from client settings
+   */
+  setOpenRouterConfig(apiKey, model = 'openai/gpt-4o-mini') {
+    if (apiKey) {
+      this.openRouterKey = apiKey;
+      this.log('info', `🤖 Using OpenRouter API key from settings`);
+    }
+    if (model) {
+      this.openRouterModel = model;
+      this.log('info', `🤖 AI Model: ${model}`);
+    }
   }
 
   /**
@@ -96,7 +111,7 @@ Respond in JSON format:
       const response = await axios.post(
         'https://openrouter.ai/api/v1/chat/completions',
         {
-          model: 'openai/gpt-4o-mini',
+          model: this.openRouterModel,
           messages: [
             {
               role: 'user',

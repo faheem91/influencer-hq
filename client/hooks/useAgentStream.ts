@@ -219,6 +219,10 @@ export async function runAgentNow(
       password: string;
     };
     creators: Array<{ username: string }>;
+    openRouterSettings?: {
+      apiKey: string;
+      model: string;
+    };
   },
   apiUrl: string = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000"
 ): Promise<{ success: boolean; result?: unknown; error?: string }> {

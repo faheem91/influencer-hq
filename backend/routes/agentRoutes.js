@@ -102,13 +102,18 @@ router.get('/api/agents/:id/stream', (req, res) => {
  */
 router.post('/api/agents/:id/run', async (req, res) => {
   const agentId = req.params.id;
-  const { client, imaiCredentials, creators } = req.body;
+  const { client, imaiCredentials, creators, openRouterSettings } = req.body;
 
   if (!client || !imaiCredentials || !creators) {
     return res.status(400).json({
       error: 'Missing required data',
       required: ['client', 'imaiCredentials', 'creators'],
     });
+  }
+
+  // Configure OpenRouter if settings provided
+  if (openRouterSettings?.apiKey) {
+    imaiAgentService.setOpenRouterConfig(openRouterSettings.apiKey, openRouterSettings.model);
   }
 
   if (!client.imaiCampaignId) {
