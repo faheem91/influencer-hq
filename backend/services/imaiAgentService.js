@@ -66,7 +66,7 @@ class ImaiAgentService extends EventEmitter {
 
       // Wait for navigation after login
       this.log('info', 'Waiting for authentication...');
-      await this.page.waitForURL(url => !url.includes('/login'), { timeout: 30000 });
+      await this.page.waitForURL(url => !url.href.includes('/login'), { timeout: 30000 });
 
       // Check if login was successful by looking for dashboard elements or URL change
       const currentUrl = this.page.url();
