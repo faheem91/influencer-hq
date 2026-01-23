@@ -569,23 +569,27 @@ Respond in JSON format:
 
   /**
    * Close any open modals to reset page state
+   * Enhanced version that checks backdrop, waits for hidden state, and forcefully removes if needed
    */
   async ensureModalClosed() {
     const maxAttempts = 5;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
-        // Check if modal is visible - use multiple selectors for Angular/Bootstrap modals
-        const modal = await this.page.$('modal-container.show, modal-container.modal, .modal.show, .modal.fade.show, [role="dialog"][aria-modal="true"]');
+        // Check if modal OR backdrop is visible
+        const modal = await this.page.$('modal-container, .modal.show, .modal.fade.show, [role="dialog"][aria-modal="true"]');
+        const backdrop = await this.page.$('.modal-backdrop');
+        const bodyModalOpen = await this.page.$('body.modal-open');
 
-        if (!modal) {
+        if (!modal && !backdrop && !bodyModalOpen) {
           if (attempt > 1) {
-            this.log('info', '✓ Modal closed successfully');
+            this.log('info', '✓ Modal and backdrop closed successfully');
           }
           return true;
         }
 
         this.log('info', `🔄 Closing open modal (attempt ${attempt}/${maxAttempts})...`);
+        this.log('info', `  → Modal: ${!!modal}, Backdrop: ${!!backdrop}, Body.modal-open: ${!!bodyModalOpen}`);
 
         // Attempt 1: Try clicking Cancel/Close/No button first (inside modal)
         try {
@@ -599,24 +603,35 @@ Respond in JSON format:
             '.modal.show button:has-text("Cancel")',
             '.modal.show button:has-text("No")',
             '.modal.show .close',
+            '.modal-header .close',
+            '.modal-header .btn-close',
+            'button.close[data-dismiss="modal"]',
+            'button[data-bs-dismiss="modal"]',
           ];
 
           for (const selector of closeButtons) {
             const btn = await this.page.$(selector);
             if (btn) {
-              await btn.click();
-              this.log('info', `  → Clicked close button: ${selector}`);
-              await this.page.waitForTimeout(1000);
-              break;
+              const isVisible = await btn.isVisible().catch(() => false);
+              if (isVisible) {
+                await btn.click();
+                this.log('info', `  → Clicked close button: ${selector}`);
+                await this.page.waitForTimeout(1000);
+                break;
+              }
             }
           }
         } catch (e) {
           // Continue to next approach
         }
 
-        // Check if closed
-        const stillOpen1 = await this.page.$('modal-container.show, modal-container.modal, .modal.show');
-        if (!stillOpen1) continue;
+        // Check if closed (including backdrop)
+        const stillOpen1 = await this.page.$('modal-container, .modal.show, .modal-backdrop');
+        if (!stillOpen1) {
+          // Also clean up body class
+          await this.page.evaluate(() => document.body.classList.remove('modal-open'));
+          continue;
+        }
 
         // Attempt 2: Try Escape key
         this.log('info', '  → Pressing Escape key...');
@@ -624,15 +639,18 @@ Respond in JSON format:
         await this.page.waitForTimeout(1000);
 
         // Check if closed
-        const stillOpen2 = await this.page.$('modal-container.show, modal-container.modal, .modal.show');
-        if (!stillOpen2) continue;
+        const stillOpen2 = await this.page.$('modal-container, .modal.show, .modal-backdrop');
+        if (!stillOpen2) {
+          await this.page.evaluate(() => document.body.classList.remove('modal-open'));
+          continue;
+        }
 
         // Attempt 3: Click on backdrop (modal-backdrop)
         try {
           this.log('info', '  → Clicking modal backdrop...');
-          const backdrop = await this.page.$('.modal-backdrop');
-          if (backdrop) {
-            await backdrop.click({ position: { x: 5, y: 5 } });
+          const backdropEl = await this.page.$('.modal-backdrop');
+          if (backdropEl) {
+            await backdropEl.click({ position: { x: 5, y: 5 }, force: true });
             await this.page.waitForTimeout(1000);
           }
         } catch (e) {
@@ -640,26 +658,164 @@ Respond in JSON format:
         }
 
         // Check if closed
-        const stillOpen3 = await this.page.$('modal-container.show, modal-container.modal, .modal.show');
-        if (!stillOpen3) continue;
+        const stillOpen3 = await this.page.$('modal-container, .modal.show, .modal-backdrop');
+        if (!stillOpen3) {
+          await this.page.evaluate(() => document.body.classList.remove('modal-open'));
+          continue;
+        }
 
         // Attempt 4: Click far outside modal
         this.log('info', '  → Clicking outside modal area...');
         await this.page.mouse.click(1, 1);
         await this.page.waitForTimeout(1000);
 
+        // Attempt 5: Force remove modal elements via JavaScript
+        if (attempt >= 3) {
+          this.log('info', '  → Force removing modal elements via JavaScript...');
+          await this.page.evaluate(() => {
+            // Remove all modal containers
+            document.querySelectorAll('modal-container, .modal').forEach(el => {
+              el.classList.remove('show', 'fade');
+              el.style.display = 'none';
+            });
+            // Remove backdrop
+            document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
+            // Remove body classes
+            document.body.classList.remove('modal-open');
+            document.body.style.overflow = '';
+            document.body.style.paddingRight = '';
+          });
+          await this.page.waitForTimeout(500);
+        }
+
       } catch (e) {
         this.log('warning', `Modal cleanup error on attempt ${attempt}: ${e.message}`);
       }
     }
 
-    // Final check - if modal still open after all attempts, log warning
-    const finalCheck = await this.page.$('modal-container.show, modal-container.modal, .modal.show');
-    if (finalCheck) {
-      this.log('warning', '⚠️ Modal could not be closed after all attempts. Will refresh page.');
+    // Final check - if modal still open after all attempts, force remove
+    const finalModal = await this.page.$('modal-container, .modal.show');
+    const finalBackdrop = await this.page.$('.modal-backdrop');
+
+    if (finalModal || finalBackdrop) {
+      this.log('warning', '⚠️ Modal still present after all attempts. Force removing...');
+      await this.page.evaluate(() => {
+        document.querySelectorAll('modal-container, .modal, .modal-backdrop').forEach(el => el.remove());
+        document.body.classList.remove('modal-open');
+        document.body.style.overflow = '';
+        document.body.style.paddingRight = '';
+      });
+      await this.page.waitForTimeout(500);
+
+      // Verify removal
+      const verifyModal = await this.page.$('modal-container, .modal.show, .modal-backdrop');
+      if (verifyModal) {
+        this.log('warning', '⚠️ Modal could not be closed. Will need page refresh.');
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  /**
+   * Force close any modal - call this unconditionally before attempting to click "Add influencer"
+   * This is more aggressive than ensureModalClosed and doesn't rely on detecting if modal is open
+   */
+  async forceCloseModal() {
+    this.log('info', '🔒 Force closing any open modals...');
+
+    // First try the gentle approach
+    const gentleClosed = await this.ensureModalClosed();
+
+    if (!gentleClosed) {
+      // Nuclear option - remove everything modal-related
+      this.log('info', '  → Using nuclear option to remove all modal elements...');
+      await this.page.evaluate(() => {
+        // Remove all modal-related elements
+        document.querySelectorAll('modal-container, .modal, .modal-dialog, .modal-backdrop, .modal-content').forEach(el => {
+          el.remove();
+        });
+        // Clean up body
+        document.body.classList.remove('modal-open');
+        document.body.style.overflow = '';
+        document.body.style.paddingRight = '';
+        document.body.style.removeProperty('overflow');
+        document.body.style.removeProperty('padding-right');
+      });
+      await this.page.waitForTimeout(500);
+    }
+
+    // Wait for any animations to complete
+    try {
+      await this.page.waitForSelector('modal-container', { state: 'hidden', timeout: 2000 }).catch(() => {});
+      await this.page.waitForSelector('.modal-backdrop', { state: 'hidden', timeout: 2000 }).catch(() => {});
+    } catch (e) {
+      // Elements might not exist, which is fine
+    }
+
+    // Final verification
+    const anyModal = await this.page.$('modal-container, .modal.show, .modal-backdrop');
+    if (anyModal) {
+      this.log('warning', '⚠️ Modal elements still detected after force close');
       return false;
     }
 
+    this.log('info', '✓ Modal state cleared');
+    return true;
+  }
+
+  /**
+   * Click Cancel button inside modal to close it explicitly
+   * Use this after errors to ensure modal is properly closed
+   */
+  async clickCancelInModal() {
+    this.log('info', '🔙 Clicking Cancel to close modal...');
+
+    const cancelSelectors = [
+      'modal-container button:has-text("Cancel")',
+      'modal-container button:has-text("Close")',
+      'modal-container button:has-text("No")',
+      '.modal.show button:has-text("Cancel")',
+      '.modal.show button:has-text("Close")',
+      '.modal-footer button:has-text("Cancel")',
+      '.modal-footer button.btn-secondary',
+      'button[data-dismiss="modal"]',
+      'button[data-bs-dismiss="modal"]',
+      '.modal-header .close',
+      '.modal-header .btn-close',
+    ];
+
+    for (const selector of cancelSelectors) {
+      try {
+        const btn = await this.page.$(selector);
+        if (btn) {
+          const isVisible = await btn.isVisible().catch(() => false);
+          if (isVisible) {
+            await btn.click();
+            this.log('info', `  → Clicked: ${selector}`);
+            await this.page.waitForTimeout(1000);
+
+            // Verify modal closed
+            const stillOpen = await this.page.$('modal-container, .modal.show, .modal-backdrop');
+            if (!stillOpen) {
+              this.log('info', '✓ Modal closed via Cancel button');
+              return true;
+            }
+          }
+        }
+      } catch (e) {
+        // Try next selector
+      }
+    }
+
+    // If Cancel didn't work, try Escape
+    this.log('info', '  → Cancel button not found, pressing Escape...');
+    await this.page.keyboard.press('Escape');
+    await this.page.waitForTimeout(1000);
+
+    // Force cleanup as last resort
+    await this.forceCloseModal();
     return true;
   }
 
@@ -731,6 +887,10 @@ Respond in JSON format:
         this.log('info', '🔄 Navigating back to campaign page...');
         await this.navigateToCampaign(campaignId);
       }
+
+      // STEP 0: Force close any lingering modals before attempting to click Add influencer
+      // This prevents the "modal intercepts pointer events" error from previous failed attempts
+      await this.forceCloseModal();
 
       // STEP 1: Click "Add influencer" button
       this.log('info', '📍 Step 1: Looking for "Add influencer" button...');
@@ -827,14 +987,48 @@ Respond in JSON format:
       await this.page.type(inputSelector, username, { delay: 150 });
       this.log('info', `✓ Entered: ${username}`);
 
-      // STEP 4: Wait for search results with AI
+      // STEP 4: Wait for search results with DOM probe + AI fallback
       this.log('info', '📍 Step 4: Waiting for search results dropdown...');
-      const searchCheck = await this.waitForStateWithAI(
-        `Waiting for search results for "${username}"`,
-        `Dropdown showing search results with "${username}" or similar usernames visible`,
-        20000,
-        2000
-      );
+
+      // First try DOM probe for common dropdown selectors
+      const dropdownProbeSelectors = [
+        'ngb-typeahead-window',
+        '[role="listbox"]',
+        '.typeahead-popup',
+        '.autocomplete-results',
+        '.dropdown-menu.show',
+      ];
+
+      let dropdownFound = false;
+      for (const selector of dropdownProbeSelectors) {
+        try {
+          await this.page.waitForSelector(selector, { state: 'visible', timeout: 5000 });
+          this.log('info', `✓ Dropdown detected via DOM probe: ${selector}`);
+          dropdownFound = true;
+          break;
+        } catch (e) {
+          // Try next selector
+        }
+      }
+
+      // If DOM probe failed, fall back to AI verification
+      if (!dropdownFound) {
+        this.log('info', '  → DOM probe found no dropdown, checking with AI...');
+        const searchCheck = await this.waitForStateWithAI(
+          `Waiting for search results for "${username}"`,
+          `Dropdown showing search results with "${username}" or similar usernames visible`,
+          15000,
+          2000
+        );
+
+        // If AI also doesn't see results, the search likely returned nothing
+        if (!searchCheck.success) {
+          this.log('warning', `⚠️ No search results found for @${username}`);
+          // Click Cancel to close modal before throwing
+          await this.clickCancelInModal();
+          throw new Error(`No search results found for @${username}`);
+        }
+      }
 
       // STEP 5: Click on the result from dropdown
       this.log('info', '📍 Step 5: Selecting from dropdown...');
@@ -1026,8 +1220,12 @@ Respond in JSON format:
     } catch (error) {
       this.log('error', `❌ Failed to add @${username}: ${error.message}`);
 
-      // Always try to close any open modals on error
-      const modalClosed = await this.ensureModalClosed();
+      // CRITICAL: First try to click Cancel to properly close the modal
+      // This prevents "modal intercepts pointer events" on next creator
+      await this.clickCancelInModal();
+
+      // Then ensure modal is fully closed (including backdrop)
+      const modalClosed = await this.forceCloseModal();
 
       // If modal couldn't be closed, refresh the page
       if (!modalClosed) {
