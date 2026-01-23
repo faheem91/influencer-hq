@@ -298,3 +298,96 @@ export async function setImaiCredentials(email: string, password: string): Promi
   await setSetting("imai_email", email);
   await setSetting("imai_password", password);
 }
+
+// ============= Creator Discovery =============
+
+interface InstagramPost {
+  id: string;
+  caption: string;
+  mediaType: string;
+  mediaUrl: string;
+  permalink: string;
+  timestamp: string;
+  creator: {
+    username: string;
+    fullName: string;
+    profilePicUrl: string | null;
+  };
+  engagement: {
+    likes: number;
+    comments: number;
+  };
+  source: {
+    type: string;
+    value: string;
+  };
+}
+
+export async function discoverCreators(
+  clientId: string,
+  hashtags: string[]
+): Promise<{ discovered: number; errors: string[] }> {
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+  const errors: string[] = [];
+  let totalDiscovered = 0;
+
+  for (const hashtag of hashtags) {
+    try {
+      const cleanTag = hashtag.replace(/^#/, "");
+      console.log(`Searching for hashtag: #${cleanTag}`);
+
+      const response = await fetch(
+        `${apiUrl}/api/instagram/search?keyword=%23${encodeURIComponent(cleanTag)}&limit=50`
+      );
+
+      if (!response.ok) {
+        errors.push(`Failed to search #${cleanTag}: ${response.statusText}`);
+        continue;
+      }
+
+      const data = await response.json();
+
+      if (!data.success || !data.data?.posts) {
+        errors.push(`No results for #${cleanTag}`);
+        continue;
+      }
+
+      // Get existing creators to avoid duplicates
+      const existingCreators = await getCreators(clientId);
+      const existingUsernames = new Set(existingCreators.map((c) => c.username.toLowerCase()));
+
+      for (const post of data.data.posts as InstagramPost[]) {
+        const username = post.creator?.username || "unknown";
+
+        // Skip if already tracked
+        if (existingUsernames.has(username.toLowerCase())) {
+          continue;
+        }
+
+        // Add creator
+        await addCreator({
+          clientId,
+          username,
+          fullName: post.creator?.fullName || null,
+          profilePicUrl: post.creator?.profilePicUrl || null,
+          platform: "instagram",
+          sourceType: "hashtag",
+          sourceValue: `#${cleanTag}`,
+          postId: post.id,
+          postCaption: post.caption || null,
+          postMediaUrl: post.mediaUrl || null,
+          engagement: post.engagement,
+          addedToImai: false,
+          imaiAddedAt: null,
+        });
+
+        existingUsernames.add(username.toLowerCase());
+        totalDiscovered++;
+      }
+    } catch (error) {
+      errors.push(`Error searching #${hashtag}: ${error instanceof Error ? error.message : "Unknown error"}`);
+    }
+  }
+
+  return { discovered: totalDiscovered, errors };
+}

@@ -104,6 +104,12 @@ export default function ClientDetailPage() {
           </div>
           <div className="flex gap-2">
             <Button variant="outline" asChild>
+              <Link href={`/clients/${clientId}/creators`}>
+                <Users className="mr-2 h-4 w-4" />
+                Discover Creators
+              </Link>
+            </Button>
+            <Button variant="outline" asChild>
               <Link href={`/clients/${clientId}/edit`}>
                 <Edit className="mr-2 h-4 w-4" />
                 Edit
@@ -156,19 +162,21 @@ export default function ClientDetailPage() {
               </div>
             </CardContent>
           </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-muted-foreground">
-                    Creators Found
-                  </p>
-                  <p className="text-2xl font-bold">{creatorsCount}</p>
+          <Link href={`/clients/${clientId}/creators`}>
+            <Card className="cursor-pointer transition-colors hover:bg-muted/50">
+              <CardContent className="pt-6">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-muted-foreground">
+                      Creators Found
+                    </p>
+                    <p className="text-2xl font-bold">{creatorsCount}</p>
+                  </div>
+                  <Users className="h-8 w-8 text-muted-foreground" />
                 </div>
-                <Users className="h-8 w-8 text-muted-foreground" />
-              </div>
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
+          </Link>
           <Card>
             <CardContent className="pt-6">
               <div className="flex items-center justify-between">

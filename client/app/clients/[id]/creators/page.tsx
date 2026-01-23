@@ -16,9 +16,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { getClient, getCreators, exportCreatorsCSV } from "@/db/queries";
+import { getClient, getCreators, exportCreatorsCSV, discoverCreators } from "@/db/queries";
 import { Client, TrackedCreator } from "@/db/schema";
-import { ArrowLeft, Download, Users, ExternalLink } from "lucide-react";
+import { ArrowLeft, Download, Users, ExternalLink, Search, Loader2, RefreshCw } from "lucide-react";
 
 export default function ClientCreatorsPage() {
   const params = useParams();
@@ -26,20 +26,66 @@ export default function ClientCreatorsPage() {
   const [client, setClient] = useState<Client | null>(null);
   const [creators, setCreators] = useState<TrackedCreator[]>([]);
   const [isPending, startTransition] = useTransition();
+  const [isDiscovering, setIsDiscovering] = useState(false);
+  const [discoveryResult, setDiscoveryResult] = useState<{ discovered: number; errors: string[] } | null>(null);
   const clientId = params.id as string;
 
+  const loadData = async () => {
+    const clientData = await getClient(clientId);
+    if (clientData) {
+      setClient(clientData);
+      const creatorsData = await getCreators(clientId);
+      setCreators(creatorsData);
+    } else {
+      router.push("/clients");
+    }
+  };
+
   useEffect(() => {
-    startTransition(async () => {
-      const clientData = await getClient(clientId);
-      if (clientData) {
-        setClient(clientData);
-        const creatorsData = await getCreators(clientId);
-        setCreators(creatorsData);
-      } else {
-        router.push("/clients");
-      }
+    startTransition(() => {
+      loadData();
     });
   }, [clientId, router]);
+
+  const handleDiscoverCreators = async () => {
+    if (!client) return;
+
+    // Collect all hashtags from all platforms
+    const hashtags: string[] = [];
+    if (client.tracking?.instagram?.hashtags) {
+      hashtags.push(...client.tracking.instagram.hashtags);
+    }
+    if (client.tracking?.facebook?.hashtags) {
+      hashtags.push(...client.tracking.facebook.hashtags);
+    }
+    if (client.tracking?.tiktok?.hashtags) {
+      hashtags.push(...client.tracking.tiktok.hashtags);
+    }
+
+    if (hashtags.length === 0) {
+      setDiscoveryResult({ discovered: 0, errors: ["No hashtags configured. Go to Edit to add hashtags."] });
+      return;
+    }
+
+    setIsDiscovering(true);
+    setDiscoveryResult(null);
+
+    try {
+      const result = await discoverCreators(client.id, hashtags);
+      setDiscoveryResult(result);
+      // Refresh the creators list
+      startTransition(() => {
+        loadData();
+      });
+    } catch (error) {
+      setDiscoveryResult({
+        discovered: 0,
+        errors: [`Discovery failed: ${error instanceof Error ? error.message : "Unknown error"}`]
+      });
+    } finally {
+      setIsDiscovering(false);
+    }
+  };
 
   const handleExportCSV = async () => {
     const csv = await exportCreatorsCSV(clientId);
@@ -74,24 +120,75 @@ export default function ClientCreatorsPage() {
     >
       <div className="space-y-6">
         {/* Header */}
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-4">
           <Button variant="ghost" asChild>
             <Link href={`/clients/${clientId}`}>
               <ArrowLeft className="mr-2 h-4 w-4" />
               Back to Client
             </Link>
           </Button>
-          <div className="flex gap-2">
-            <Button variant="outline" onClick={handleExportCSV}>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              onClick={handleDiscoverCreators}
+              disabled={isDiscovering}
+              className="bg-green-600 hover:bg-green-700"
+            >
+              {isDiscovering ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Discovering...
+                </>
+              ) : (
+                <>
+                  <Search className="mr-2 h-4 w-4" />
+                  Discover Creators
+                </>
+              )}
+            </Button>
+            <Button variant="outline" onClick={handleExportCSV} disabled={creators.length === 0}>
               <Download className="mr-2 h-4 w-4" />
               Export CSV
             </Button>
-            <Button variant="outline" onClick={handleExportJSON}>
+            <Button variant="outline" onClick={handleExportJSON} disabled={creators.length === 0}>
               <Download className="mr-2 h-4 w-4" />
               Export JSON
             </Button>
           </div>
         </div>
+
+        {/* Discovery Results */}
+        {discoveryResult && (
+          <Card className={discoveryResult.errors.length > 0 && discoveryResult.discovered === 0 ? "border-red-500 bg-red-50 dark:bg-red-950/20" : "border-green-500 bg-green-50 dark:bg-green-950/20"}>
+            <CardContent className="pt-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  {discoveryResult.discovered > 0 && (
+                    <p className="text-green-700 dark:text-green-400 font-medium">
+                      Found {discoveryResult.discovered} new creator{discoveryResult.discovered !== 1 ? "s" : ""}!
+                    </p>
+                  )}
+                  {discoveryResult.errors.length > 0 && (
+                    <div className="text-sm text-red-700 dark:text-red-400 mt-1">
+                      {discoveryResult.errors.map((err, i) => (
+                        <p key={i}>{err}</p>
+                      ))}
+                    </div>
+                  )}
+                  {discoveryResult.discovered === 0 && discoveryResult.errors.length === 0 && (
+                    <p className="text-muted-foreground">No new creators found. All creators from hashtags are already tracked.</p>
+                  )}
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setDiscoveryResult(null)}
+                >
+                  Dismiss
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Stats */}
         <div className="grid gap-4 md:grid-cols-4">
@@ -145,9 +242,26 @@ export default function ClientCreatorsPage() {
               <div className="py-16 text-center">
                 <Users className="mx-auto mb-4 h-12 w-12 text-muted-foreground" />
                 <h3 className="mb-2 text-lg font-semibold">No creators yet</h3>
-                <p className="text-muted-foreground">
-                  Creators will appear here once the agent starts tracking
+                <p className="text-muted-foreground mb-4">
+                  Click "Discover Creators" to search Instagram for creators using your configured hashtags
                 </p>
+                <Button
+                  onClick={handleDiscoverCreators}
+                  disabled={isDiscovering}
+                  className="bg-green-600 hover:bg-green-700"
+                >
+                  {isDiscovering ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Discovering...
+                    </>
+                  ) : (
+                    <>
+                      <Search className="mr-2 h-4 w-4" />
+                      Discover Creators
+                    </>
+                  )}
+                </Button>
               </div>
             ) : (
               <Table>
@@ -155,7 +269,7 @@ export default function ClientCreatorsPage() {
                   <TableRow>
                     <TableHead>Creator</TableHead>
                     <TableHead>Platform</TableHead>
-                    <TableHead>Source</TableHead>
+                    <TableHead>Hashtag</TableHead>
                     <TableHead>Discovered</TableHead>
                     <TableHead>IMAI Status</TableHead>
                     <TableHead>Engagement</TableHead>
@@ -189,14 +303,9 @@ export default function ClientCreatorsPage() {
                         </Badge>
                       </TableCell>
                       <TableCell>
-                        <div>
-                          <Badge variant="secondary" className="capitalize">
-                            {creator.sourceType}
-                          </Badge>
-                          <p className="mt-1 text-xs text-muted-foreground">
-                            {creator.sourceValue}
-                          </p>
-                        </div>
+                        <Badge variant="secondary" className="font-medium">
+                          {creator.sourceValue}
+                        </Badge>
                       </TableCell>
                       <TableCell>
                         {new Date(creator.discoveredAt).toLocaleDateString()}
