@@ -57,6 +57,18 @@ imaiAgentService.on('stopping', () => {
   }
 });
 
+// Forward creators list updates
+imaiAgentService.on('creators_update', (data) => {
+  for (const [agentId] of sseConnections) {
+    broadcastToAgent(agentId, {
+      type: 'creators_update',
+      creatorsList: data.creatorsList,
+      currentCreatorIndex: data.currentCreatorIndex,
+      timestamp: new Date().toISOString(),
+    });
+  }
+});
+
 /**
  * GET /api/agents/:id/stream
  * SSE endpoint for real-time agent logs
@@ -221,6 +233,114 @@ router.post('/api/agents/:id/stop', async (req, res) => {
       error: error.message,
     });
   }
+});
+
+/**
+ * POST /api/agents/:id/skip
+ * Skip the currently processing creator
+ */
+router.post('/api/agents/:id/skip', (req, res) => {
+  const agentId = req.params.id;
+
+  if (!imaiAgentService.isRunning) {
+    return res.status(400).json({
+      success: false,
+      error: 'Agent is not running',
+    });
+  }
+
+  imaiAgentService.queueCommand({ type: 'skip' });
+
+  broadcastToAgent(agentId, {
+    type: 'log',
+    level: 'warning',
+    message: '⏭️ Skip command queued - will skip current creator',
+    timestamp: new Date().toISOString(),
+  });
+
+  res.json({
+    success: true,
+    message: 'Skip command queued',
+  });
+});
+
+/**
+ * POST /api/agents/:id/relogin
+ * Force re-login to IMAI
+ */
+router.post('/api/agents/:id/relogin', (req, res) => {
+  const agentId = req.params.id;
+
+  if (!imaiAgentService.isRunning) {
+    return res.status(400).json({
+      success: false,
+      error: 'Agent is not running',
+    });
+  }
+
+  imaiAgentService.queueCommand({ type: 'relogin' });
+
+  broadcastToAgent(agentId, {
+    type: 'log',
+    level: 'info',
+    message: '🔄 Relogin command queued - will re-authenticate',
+    timestamp: new Date().toISOString(),
+  });
+
+  res.json({
+    success: true,
+    message: 'Relogin command queued',
+  });
+});
+
+/**
+ * POST /api/agents/:id/switch
+ * Switch to a different creator in the queue
+ */
+router.post('/api/agents/:id/switch', (req, res) => {
+  const agentId = req.params.id;
+  const { username } = req.body;
+
+  if (!username) {
+    return res.status(400).json({
+      success: false,
+      error: 'Missing username in request body',
+    });
+  }
+
+  if (!imaiAgentService.isRunning) {
+    return res.status(400).json({
+      success: false,
+      error: 'Agent is not running',
+    });
+  }
+
+  imaiAgentService.queueCommand({ type: 'switch', username });
+
+  broadcastToAgent(agentId, {
+    type: 'log',
+    level: 'info',
+    message: `🔀 Switch command queued - will switch to @${username}`,
+    timestamp: new Date().toISOString(),
+  });
+
+  res.json({
+    success: true,
+    message: `Switch to @${username} command queued`,
+  });
+});
+
+/**
+ * GET /api/agents/:id/creators
+ * Get the current creators list with statuses
+ */
+router.get('/api/agents/:id/creators', (req, res) => {
+  const creatorsData = imaiAgentService.getCreatorsList();
+
+  res.json({
+    success: true,
+    ...creatorsData,
+  });
 });
 
 /**

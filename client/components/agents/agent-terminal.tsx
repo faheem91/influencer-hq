@@ -5,9 +5,25 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { Play, Square, Terminal, Clock, RefreshCw, CheckCircle2, XCircle, SkipForward, Loader2 } from "lucide-react";
+import {
+  Play,
+  Square,
+  Terminal,
+  Clock,
+  RefreshCw,
+  CheckCircle2,
+  XCircle,
+  SkipForward,
+  Loader2,
+  LogIn,
+  ChevronDown,
+  ChevronUp,
+  Users,
+  CircleDot,
+  Circle
+} from "lucide-react";
 import { cn } from "@/lib/utils";
-import { TerminalLog, AgentProgress } from "@/hooks/useAgentStream";
+import { TerminalLog, AgentProgress, CreatorStatus } from "@/hooks/useAgentStream";
 
 interface AgentTerminalProps {
   agentId: string;
@@ -19,6 +35,11 @@ interface AgentTerminalProps {
   logs: TerminalLog[];
   isConnected: boolean;
   progress?: AgentProgress | null;
+  creatorsList?: CreatorStatus[];
+  currentCreatorIndex?: number;
+  onSkip?: () => void;
+  onRelogin?: () => void;
+  onSwitchCreator?: (username: string) => void;
 }
 
 export function AgentTerminal({
@@ -31,9 +52,15 @@ export function AgentTerminal({
   logs,
   isConnected,
   progress,
+  creatorsList = [],
+  currentCreatorIndex = -1,
+  onSkip,
+  onRelogin,
+  onSwitchCreator,
 }: AgentTerminalProps) {
   const terminalRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
+  const [showCreatorsList, setShowCreatorsList] = useState(false);
 
   // Auto-scroll to bottom when new logs arrive
   useEffect(() => {
@@ -112,6 +139,36 @@ export function AgentTerminal({
   const progressPercent = progress && progress.total > 0
     ? Math.round((progress.current / progress.total) * 100)
     : 0;
+
+  const getCreatorStatusIcon = (creatorStatus: CreatorStatus["status"]) => {
+    switch (creatorStatus) {
+      case "added":
+        return <CheckCircle2 className="h-4 w-4 text-green-500" />;
+      case "failed":
+        return <XCircle className="h-4 w-4 text-red-500" />;
+      case "skipped":
+        return <SkipForward className="h-4 w-4 text-yellow-500" />;
+      case "processing":
+        return <Loader2 className="h-4 w-4 text-blue-500 animate-spin" />;
+      default:
+        return <Circle className="h-4 w-4 text-zinc-500" />;
+    }
+  };
+
+  const getCreatorStatusColor = (creatorStatus: CreatorStatus["status"]) => {
+    switch (creatorStatus) {
+      case "added":
+        return "text-green-400";
+      case "failed":
+        return "text-red-400";
+      case "skipped":
+        return "text-yellow-400";
+      case "processing":
+        return "text-blue-400";
+      default:
+        return "text-zinc-400";
+    }
+  };
 
   return (
     <Card className="overflow-hidden border-zinc-800 bg-zinc-950">
@@ -219,6 +276,84 @@ export function AgentTerminal({
               <span className="text-zinc-400">Skipped:</span>
               <span className="text-yellow-400 font-semibold">{progress.skipped}</span>
             </div>
+          </div>
+
+          {/* Action buttons row */}
+          <div className="flex items-center justify-between mt-3 pt-3 border-t border-zinc-700/50">
+            <div className="flex items-center gap-2">
+              {onSkip && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={onSkip}
+                  className="h-7 px-2 text-yellow-500 border-yellow-500/50 hover:bg-yellow-500/10 hover:text-yellow-400"
+                >
+                  <SkipForward className="me-1 h-3 w-3" />
+                  Skip
+                </Button>
+              )}
+              {onRelogin && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={onRelogin}
+                  className="h-7 px-2 text-blue-500 border-blue-500/50 hover:bg-blue-500/10 hover:text-blue-400"
+                >
+                  <LogIn className="me-1 h-3 w-3" />
+                  Relogin
+                </Button>
+              )}
+            </div>
+
+            {creatorsList.length > 0 && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowCreatorsList(!showCreatorsList)}
+                className="h-7 px-2 text-zinc-400 hover:text-white"
+              >
+                <Users className="me-1 h-3 w-3" />
+                Creators ({creatorsList.length})
+                {showCreatorsList ? (
+                  <ChevronUp className="ms-1 h-3 w-3" />
+                ) : (
+                  <ChevronDown className="ms-1 h-3 w-3" />
+                )}
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Creators List Panel */}
+      {showCreatorsList && creatorsList.length > 0 && (status === "running" || status === "stopping") && (
+        <div className="border-b border-zinc-800 bg-zinc-900/30 px-4 py-2 max-h-48 overflow-y-auto">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-1">
+            {creatorsList.map((creator, index) => (
+              <button
+                key={creator.username}
+                onClick={() => {
+                  if (creator.status === "pending" && onSwitchCreator) {
+                    onSwitchCreator(creator.username);
+                  }
+                }}
+                disabled={creator.status !== "pending"}
+                className={cn(
+                  "flex items-center gap-2 px-2 py-1.5 rounded text-xs transition-colors text-start",
+                  index === currentCreatorIndex && "bg-blue-500/20 ring-1 ring-blue-500/50",
+                  creator.status === "pending" && "hover:bg-zinc-700/50 cursor-pointer",
+                  creator.status !== "pending" && "cursor-default"
+                )}
+              >
+                {getCreatorStatusIcon(creator.status)}
+                <span className={cn(
+                  "truncate",
+                  getCreatorStatusColor(creator.status)
+                )}>
+                  @{creator.username}
+                </span>
+              </button>
+            ))}
           </div>
         </div>
       )}

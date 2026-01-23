@@ -23,6 +23,9 @@ import {
   useAgentStream,
   runAgentNow,
   stopAgent,
+  skipCurrentCreator,
+  forceRelogin,
+  switchToCreator,
 } from "@/hooks/useAgentStream";
 import { Agent, Client, AgentLog } from "@/db/schema";
 import {
@@ -46,7 +49,16 @@ export default function AgentDetailPage() {
   const agentId = params.id as string;
 
   // SSE connection for real-time logs
-  const { logs: streamLogs, isConnected, clearLogs, addLog, progress, agentStatus: streamStatus } = useAgentStream(agentId);
+  const {
+    logs: streamLogs,
+    isConnected,
+    clearLogs,
+    addLog,
+    progress,
+    agentStatus: streamStatus,
+    creatorsList,
+    currentCreatorIndex,
+  } = useAgentStream(agentId);
 
   const loadData = () => {
     startTransition(async () => {
@@ -234,6 +246,81 @@ export default function AgentDetailPage() {
     loadData();
   };
 
+  const handleSkip = async () => {
+    try {
+      const result = await skipCurrentCreator(agentId);
+      if (result.success) {
+        addLog({
+          timestamp: new Date().toISOString(),
+          level: "warning",
+          message: "Skip command sent...",
+        });
+      } else {
+        addLog({
+          timestamp: new Date().toISOString(),
+          level: "error",
+          message: result.error || "Failed to skip creator",
+        });
+      }
+    } catch (error) {
+      addLog({
+        timestamp: new Date().toISOString(),
+        level: "error",
+        message: `Skip error: ${error instanceof Error ? error.message : "Unknown error"}`,
+      });
+    }
+  };
+
+  const handleRelogin = async () => {
+    try {
+      const result = await forceRelogin(agentId);
+      if (result.success) {
+        addLog({
+          timestamp: new Date().toISOString(),
+          level: "info",
+          message: "Relogin command sent...",
+        });
+      } else {
+        addLog({
+          timestamp: new Date().toISOString(),
+          level: "error",
+          message: result.error || "Failed to relogin",
+        });
+      }
+    } catch (error) {
+      addLog({
+        timestamp: new Date().toISOString(),
+        level: "error",
+        message: `Relogin error: ${error instanceof Error ? error.message : "Unknown error"}`,
+      });
+    }
+  };
+
+  const handleSwitchCreator = async (username: string) => {
+    try {
+      const result = await switchToCreator(agentId, username);
+      if (result.success) {
+        addLog({
+          timestamp: new Date().toISOString(),
+          level: "info",
+          message: `Switching to @${username}...`,
+        });
+      } else {
+        addLog({
+          timestamp: new Date().toISOString(),
+          level: "error",
+          message: result.error || `Failed to switch to @${username}`,
+        });
+      }
+    } catch (error) {
+      addLog({
+        timestamp: new Date().toISOString(),
+        level: "error",
+        message: `Switch error: ${error instanceof Error ? error.message : "Unknown error"}`,
+      });
+    }
+  };
+
   if (!agent) {
     return null;
   }
@@ -308,6 +395,11 @@ export default function AgentDetailPage() {
           logs={streamLogs}
           isConnected={isConnected}
           progress={progress}
+          creatorsList={creatorsList}
+          currentCreatorIndex={currentCreatorIndex}
+          onSkip={handleSkip}
+          onRelogin={handleRelogin}
+          onSwitchCreator={handleSwitchCreator}
         />
 
         {/* Agent Info */}

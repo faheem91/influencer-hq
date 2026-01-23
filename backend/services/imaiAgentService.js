@@ -13,6 +13,14 @@ class ImaiAgentService extends EventEmitter {
     this.openRouterKey = process.env.OPENROUTER_API_KEY;
     this.openRouterModel = 'openai/gpt-4o-mini';
     this.failedCreators = []; // Track failed creators for retry
+
+    // Command queue system for interactive controls
+    this.commandQueue = [];
+    this.currentCreatorIndex = 0;
+    this.creatorsList = []; // Array of { username, status: 'pending'|'processing'|'added'|'failed'|'skipped' }
+    this.isPaused = false;
+    this.currentCredentials = null; // Store credentials for relogin
+    this.currentCampaignId = null; // Store campaign ID for navigation after relogin
   }
 
   /**
@@ -37,6 +45,128 @@ class ImaiAgentService extends EventEmitter {
     this.log('warning', '🛑 Stop requested, finishing current operation...');
     this.isStopping = true;
     this.emit('stopping');
+  }
+
+  /**
+   * Queue a command to be processed between creator operations
+   */
+  queueCommand(command) {
+    this.commandQueue.push(command);
+    this.log('info', `📥 Command queued: ${command.type}`);
+  }
+
+  /**
+   * Process any pending commands in the queue
+   */
+  async processCommandQueue() {
+    while (this.commandQueue.length > 0) {
+      const command = this.commandQueue.shift();
+
+      switch (command.type) {
+        case 'skip':
+          await this.handleSkipCommand();
+          break;
+        case 'relogin':
+          await this.handleReloginCommand();
+          break;
+        case 'switch':
+          await this.handleSwitchCreatorCommand(command.username);
+          break;
+        default:
+          this.log('warning', `Unknown command type: ${command.type}`);
+      }
+    }
+  }
+
+  /**
+   * Handle skip command - mark current creator as skipped and move to next
+   */
+  async handleSkipCommand() {
+    if (this.currentCreatorIndex < this.creatorsList.length) {
+      const currentCreator = this.creatorsList[this.currentCreatorIndex];
+      this.log('warning', `⏭️ Skipping @${currentCreator.username} by user request`);
+      this.creatorsList[this.currentCreatorIndex].status = 'skipped';
+      this.emitCreatorsUpdate();
+    }
+    // The skip flag will be checked in the main loop
+    this.skipCurrent = true;
+  }
+
+  /**
+   * Handle relogin command - force re-authentication
+   */
+  async handleReloginCommand() {
+    if (!this.currentCredentials) {
+      this.log('error', '❌ Cannot relogin - no credentials stored');
+      return;
+    }
+
+    this.log('info', '🔄 Force re-login requested...');
+    this.isLoggedIn = false;
+
+    try {
+      await this.login(this.currentCredentials.email, this.currentCredentials.password);
+      this.log('success', '✅ Re-login successful');
+
+      if (this.currentCampaignId) {
+        await this.navigateToCampaign(this.currentCampaignId);
+        this.log('success', '✅ Navigated back to campaign');
+      }
+    } catch (error) {
+      this.log('error', `❌ Re-login failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * Handle switch creator command - pause and switch to a different creator
+   */
+  async handleSwitchCreatorCommand(username) {
+    const targetIndex = this.creatorsList.findIndex(
+      c => c.username.toLowerCase() === username.toLowerCase()
+    );
+
+    if (targetIndex === -1) {
+      this.log('error', `❌ Creator @${username} not found in list`);
+      return;
+    }
+
+    if (this.creatorsList[targetIndex].status !== 'pending') {
+      this.log('warning', `⚠️ Creator @${username} is not in pending state (${this.creatorsList[targetIndex].status})`);
+      return;
+    }
+
+    this.log('info', `🔀 Switching to @${username} (was at index ${this.currentCreatorIndex}, switching to ${targetIndex})`);
+
+    // Mark current as skipped if in processing
+    if (this.currentCreatorIndex < this.creatorsList.length &&
+        this.creatorsList[this.currentCreatorIndex].status === 'processing') {
+      this.creatorsList[this.currentCreatorIndex].status = 'skipped';
+    }
+
+    this.switchToIndex = targetIndex;
+    this.skipCurrent = true;
+    this.emitCreatorsUpdate();
+  }
+
+  /**
+   * Emit creators list update via SSE
+   */
+  emitCreatorsUpdate() {
+    this.emit('creators_update', {
+      creatorsList: this.creatorsList,
+      currentCreatorIndex: this.currentCreatorIndex
+    });
+  }
+
+  /**
+   * Get current creators list with statuses
+   */
+  getCreatorsList() {
+    return {
+      creatorsList: this.creatorsList,
+      currentCreatorIndex: this.currentCreatorIndex,
+      isRunning: this.isRunning
+    };
   }
 
   log(level, message, details = null) {
@@ -780,6 +910,23 @@ Respond in JSON format:
     this.isStopping = false;
     this.failedCreators = [];
 
+    // Store credentials and campaign ID for relogin/navigation
+    this.currentCredentials = imaiCredentials;
+    this.currentCampaignId = client.imaiCampaignId;
+
+    // Initialize command queue state
+    this.commandQueue = [];
+    this.skipCurrent = false;
+    this.switchToIndex = null;
+    this.currentCreatorIndex = 0;
+
+    // Initialize creators list with pending status
+    this.creatorsList = creators.map(c => ({
+      username: c.username,
+      status: 'pending'
+    }));
+    this.emitCreatorsUpdate();
+
     const results = {
       total: creators.length,
       added: 0,
@@ -807,56 +954,104 @@ Respond in JSON format:
       // Navigate to campaign
       await this.navigateToCampaign(client.imaiCampaignId);
 
-      // Process each creator
-      for (let i = 0; i < creators.length; i++) {
+      // Process each creator using index-based loop for switch support
+      let i = 0;
+      while (i < creators.length) {
+        // Process any pending commands first
+        await this.processCommandQueue();
+
+        // Handle switch command
+        if (this.switchToIndex !== null) {
+          i = this.switchToIndex;
+          this.switchToIndex = null;
+          this.skipCurrent = false;
+        }
+
         // Check if stop was requested
         if (this.isStopping) {
           this.log('warning', '🛑 Agent stopped by user');
           break;
         }
 
+        // Skip already processed creators (added/failed/skipped)
+        if (this.creatorsList[i].status !== 'pending') {
+          i++;
+          continue;
+        }
+
         const creator = creators[i];
+        this.currentCreatorIndex = i;
 
         // Skip invalid usernames
         if (!creator.username || creator.username === 'unknown') {
           this.log('warning', `Skipping invalid username: ${creator.username}`);
+          this.creatorsList[i].status = 'skipped';
           results.skipped++;
           results.details.push({ success: false, username: creator.username, reason: 'invalid_username' });
+          this.emitCreatorsUpdate();
+          i++;
           continue;
         }
+
+        // Mark as processing and emit update
+        this.creatorsList[i].status = 'processing';
+        this.emitCreatorsUpdate();
 
         this.log('info', '');
         this.log('info', `═══════════════════════════════════════════════════`);
         this.log('info', `  Processing ${i + 1}/${creators.length}: @${creator.username}`);
         this.log('info', `═══════════════════════════════════════════════════`);
 
+        // Check for skip command before processing
+        if (this.skipCurrent) {
+          this.skipCurrent = false;
+          this.creatorsList[i].status = 'skipped';
+          results.skipped++;
+          results.details.push({ success: false, username: creator.username, reason: 'user_skipped' });
+          this.emitCreatorsUpdate();
+          i++;
+          continue;
+        }
+
         const result = await this.addInfluencerWithAI(creator.username, imaiCredentials, client.imaiCampaignId);
         results.details.push(result);
+
+        // Update creator status based on result
+        if (result.success) {
+          this.creatorsList[i].status = 'added';
+          results.added++;
+        } else if (result.reason === 'already_exists') {
+          this.creatorsList[i].status = 'skipped';
+          results.skipped++;
+        } else {
+          this.creatorsList[i].status = 'failed';
+          results.failed++;
+        }
+        this.emitCreatorsUpdate();
 
         // Emit progress for real-time updates
         this.emit('progress', {
           current: i + 1,
           total: creators.length,
-          added: results.added + (result.success ? 1 : 0),
-          failed: results.failed + (!result.success && result.reason !== 'already_exists' ? 1 : 0),
-          skipped: results.skipped + (result.reason === 'already_exists' ? 1 : 0),
+          added: results.added,
+          failed: results.failed,
+          skipped: results.skipped,
           currentCreator: creator.username,
           lastResult: result
         });
 
-        if (result.success) {
-          results.added++;
-        } else if (result.reason === 'already_exists') {
-          results.skipped++;
-        } else {
-          results.failed++;
-        }
+        i++;
 
-        // 30 second wait between creators
-        if (i < creators.length - 1) {
+        // 30 second wait between creators (check for commands during wait)
+        if (i < creators.length && !this.isStopping) {
           this.log('info', '');
           this.log('info', '⏳ Waiting 30 seconds before next creator...');
-          await this.page.waitForTimeout(30000);
+
+          // Split wait into smaller chunks to check for commands
+          for (let waitTime = 0; waitTime < 30000; waitTime += 1000) {
+            if (this.commandQueue.length > 0 || this.isStopping) break;
+            await this.page.waitForTimeout(1000);
+          }
         }
       }
 
@@ -944,6 +1139,14 @@ Respond in JSON format:
       this.isLoggedIn = false;
       this.isRunning = false;
       this.isStopping = false;
+
+      // Clear command queue state
+      this.commandQueue = [];
+      this.currentCredentials = null;
+      this.currentCampaignId = null;
+      this.skipCurrent = false;
+      this.switchToIndex = null;
+
       this.log('success', 'Cleanup complete');
     } catch (error) {
       this.log('error', 'Cleanup error', { error: error.message });

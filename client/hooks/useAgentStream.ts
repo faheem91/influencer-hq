@@ -9,8 +9,13 @@ export interface TerminalLog {
   details?: string | Record<string, unknown>;
 }
 
+export interface CreatorStatus {
+  username: string;
+  status: "pending" | "processing" | "added" | "failed" | "skipped";
+}
+
 interface SSEMessage {
-  type: "log" | "status" | "connected" | "progress";
+  type: "log" | "status" | "connected" | "progress" | "creators_update";
   timestamp?: string;
   level?: "info" | "success" | "error" | "warning" | "ai";
   message?: string;
@@ -26,6 +31,9 @@ interface SSEMessage {
   skipped?: number;
   currentCreator?: string;
   isRetry?: boolean;
+  // Creators list fields
+  creatorsList?: CreatorStatus[];
+  currentCreatorIndex?: number;
 }
 
 export interface AgentProgress {
@@ -54,6 +62,8 @@ export function useAgentStream(
   const [agentStatus, setAgentStatus] = useState<"idle" | "running" | "error" | "completed" | "stopping">("idle");
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<AgentProgress | null>(null);
+  const [creatorsList, setCreatorsList] = useState<CreatorStatus[]>([]);
+  const [currentCreatorIndex, setCurrentCreatorIndex] = useState<number>(-1);
 
   const eventSourceRef = useRef<EventSource | null>(null);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -112,11 +122,22 @@ export function useAgentStream(
           });
         }
 
+        if (data.type === "creators_update") {
+          if (data.creatorsList) {
+            setCreatorsList(data.creatorsList);
+          }
+          if (typeof data.currentCreatorIndex === "number") {
+            setCurrentCreatorIndex(data.currentCreatorIndex);
+          }
+        }
+
         if (data.type === "status") {
           switch (data.status) {
             case "starting":
               setAgentStatus("running");
               setProgress(null); // Reset progress
+              setCreatorsList([]); // Reset creators list
+              setCurrentCreatorIndex(-1);
               break;
             case "completed":
               setAgentStatus("completed");
@@ -191,17 +212,25 @@ export function useAgentStream(
     setProgress(null);
   }, []);
 
+  const clearCreatorsList = useCallback(() => {
+    setCreatorsList([]);
+    setCurrentCreatorIndex(-1);
+  }, []);
+
   return {
     logs,
     isConnected,
     agentStatus,
     error,
     progress,
+    creatorsList,
+    currentCreatorIndex,
     connect,
     disconnect,
     clearLogs,
     addLog,
     resetProgress,
+    clearCreatorsList,
   };
 }
 
@@ -274,5 +303,56 @@ export async function testImaiLogin(
     body: JSON.stringify({ email, password }),
   });
 
+  return response.json();
+}
+
+export async function skipCurrentCreator(
+  agentId: string,
+  apiUrl: string = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000"
+): Promise<{ success: boolean; message?: string; error?: string }> {
+  const response = await fetch(`${apiUrl}/api/agents/${agentId}/skip`, {
+    method: "POST",
+  });
+
+  return response.json();
+}
+
+export async function forceRelogin(
+  agentId: string,
+  apiUrl: string = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000"
+): Promise<{ success: boolean; message?: string; error?: string }> {
+  const response = await fetch(`${apiUrl}/api/agents/${agentId}/relogin`, {
+    method: "POST",
+  });
+
+  return response.json();
+}
+
+export async function switchToCreator(
+  agentId: string,
+  username: string,
+  apiUrl: string = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000"
+): Promise<{ success: boolean; message?: string; error?: string }> {
+  const response = await fetch(`${apiUrl}/api/agents/${agentId}/switch`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ username }),
+  });
+
+  return response.json();
+}
+
+export async function getCreatorsList(
+  agentId: string,
+  apiUrl: string = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000"
+): Promise<{
+  success: boolean;
+  creatorsList: Array<{ username: string; status: string }>;
+  currentCreatorIndex: number;
+  isRunning: boolean;
+}> {
+  const response = await fetch(`${apiUrl}/api/agents/${agentId}/creators`);
   return response.json();
 }
