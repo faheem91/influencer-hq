@@ -312,17 +312,14 @@ Respond in JSON format:
       return true; // Indicates we had to re-login
     }
 
-    // AI check for login state - more thorough check
+    // AI check for login state - stringify full analysis to catch any format
     const analysis = await this.analyzePageWithAI('Quick check: is this a login page with username/email and password fields?');
-    if (analysis.analysis && typeof analysis.analysis === 'object') {
-      const state = (analysis.analysis.pageState || analysis.analysis.currentState || '').toLowerCase();
-      const hasLogin = state.includes('login') || state.includes('sign in') || state.includes('password') || state.includes('email field');
-      if (hasLogin) {
-        this.log('warning', `⚠️ AI detected login page: "${state}", re-logging in...`);
-        this.isLoggedIn = false;
-        await this.login(email, password);
-        return true;
-      }
+    const analysisStr = JSON.stringify(analysis.analysis || '').toLowerCase();
+    if (analysisStr.includes('login') || analysisStr.includes('password') || analysisStr.includes('sign in') || analysisStr.includes('email field')) {
+      this.log('warning', `⚠️ AI detected login page, re-logging in...`);
+      this.isLoggedIn = false;
+      await this.login(email, password);
+      return true;
     }
 
     return false;
@@ -350,15 +347,15 @@ Respond in JSON format:
       // First verify the page state - check if we're still logged in
       let pageAnalysis = await this.analyzePageWithAI('Checking if Add influencer button is visible or if login form is shown');
 
-      // Check if AI detected login page
-      if (pageAnalysis.analysis && typeof pageAnalysis.analysis === 'object') {
-        const state = (pageAnalysis.analysis.pageState || pageAnalysis.analysis.currentState || '').toLowerCase();
-        if (state.includes('login') || state.includes('password') || state.includes('sign in')) {
-          this.log('warning', '⚠️ AI detected login page in Step 1, re-logging in...');
-          this.isLoggedIn = false;
-          await this.login(credentials.email, credentials.password);
-          await this.navigateToCampaign(campaignId);
-        }
+      // Check if AI detected login page - check all possible fields
+      const analysisStr = JSON.stringify(pageAnalysis.analysis || '').toLowerCase();
+      if (analysisStr.includes('login') || analysisStr.includes('password') || analysisStr.includes('sign in') || analysisStr.includes('email field')) {
+        this.log('warning', '⚠️ AI detected login page in Step 1, re-logging in...');
+        this.isLoggedIn = false;
+        await this.login(credentials.email, credentials.password);
+        await this.navigateToCampaign(campaignId);
+        // Re-verify we're now on the right page
+        pageAnalysis = await this.analyzePageWithAI('Verifying Add influencer button is now visible after re-login');
       }
 
       const addButtonSelector = 'button:has-text("Add influencer")';
