@@ -48,22 +48,25 @@ class ImaiAgentService extends EventEmitter {
       await this.page.goto('https://imai.co/login', { waitUntil: 'networkidle' });
       this.log('info', 'Login page loaded');
 
-      // Wait for and fill email field
+      // Wait for Angular app to fully render the form
+      await this.page.waitForSelector('input[name="username"]', { timeout: 15000 });
+      await this.page.waitForTimeout(1000); // Extra wait for Angular
+
+      // Fill email/username field
       this.log('info', 'Entering email...');
-      await this.page.waitForSelector('input[type="email"], input[name="email"], input[placeholder*="email" i]', { timeout: 10000 });
-      await this.page.fill('input[type="email"], input[name="email"], input[placeholder*="email" i]', email);
+      await this.page.fill('input[name="username"]', email);
 
       // Fill password field
       this.log('info', 'Entering password...');
-      await this.page.fill('input[type="password"], input[name="password"]', password);
+      await this.page.fill('input[name="password"]', password);
 
-      // Click login button
+      // Click login button (use specific class to avoid language button)
       this.log('info', 'Clicking login button...');
-      await this.page.click('button[type="submit"]');
+      await this.page.click('button.btn-dark');
 
       // Wait for navigation after login
       this.log('info', 'Waiting for authentication...');
-      await this.page.waitForNavigation({ waitUntil: 'networkidle', timeout: 30000 });
+      await this.page.waitForURL(url => !url.includes('/login'), { timeout: 30000 });
 
       // Check if login was successful by looking for dashboard elements or URL change
       const currentUrl = this.page.url();
