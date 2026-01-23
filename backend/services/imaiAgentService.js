@@ -45,7 +45,7 @@ class ImaiAgentService extends EventEmitter {
     this.log('info', 'Navigating to IMAI login page...');
 
     try {
-      await this.page.goto('https://app.imai.co/login', { waitUntil: 'networkidle' });
+      await this.page.goto('https://imai.co/login', { waitUntil: 'networkidle' });
       this.log('info', 'Login page loaded');
 
       // Wait for and fill email field
@@ -91,7 +91,7 @@ class ImaiAgentService extends EventEmitter {
 
     try {
       // Navigate to campaign page
-      await this.page.goto(`https://app.imai.co/campaigns/${campaignId}`, { waitUntil: 'networkidle' });
+      await this.page.goto(`https://imai.co/campaigns/${campaignId}`, { waitUntil: 'networkidle' });
 
       // Wait for campaign page to load
       await this.page.waitForSelector('body', { timeout: 10000 });
