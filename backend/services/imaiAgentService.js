@@ -1,5 +1,6 @@
 const { chromium } = require('playwright');
 const EventEmitter = require('events');
+const axios = require('axios');
 
 class ImaiAgentService extends EventEmitter {
   constructor() {
@@ -8,6 +9,8 @@ class ImaiAgentService extends EventEmitter {
     this.page = null;
     this.isRunning = false;
     this.isLoggedIn = false;
+    this.openRouterKey = process.env.OPENROUTER_API_KEY;
+    this.failedCreators = []; // Track failed creators for retry
   }
 
   log(level, message, details = null) {
@@ -22,37 +25,165 @@ class ImaiAgentService extends EventEmitter {
   }
 
   /**
-   * Extract campaign ID from JWT URL or return as-is if numeric
-   * JWT URL format: https://imai.co/c/eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJjYW1wYWlnbiI6NTQwNywiaWF0IjoxNzY5MTE2Mzc5fQ...
-   * JWT payload contains: {"campaign":5407,"iat":...}
+   * Take a screenshot and get AI analysis of the current page state
+   */
+  async analyzePageWithAI(context, expectedState = null) {
+    if (!this.page) return { success: false, analysis: 'No page available' };
+
+    try {
+      // Take screenshot
+      const screenshot = await this.page.screenshot({ type: 'png' });
+      const base64Image = screenshot.toString('base64');
+
+      // Get current URL for context
+      const currentUrl = this.page.url();
+
+      const prompt = expectedState
+        ? `You are analyzing a screenshot of the IMAI influencer marketing platform.
+
+Current URL: ${currentUrl}
+Context: ${context}
+Expected state: ${expectedState}
+
+Analyze this screenshot and determine:
+1. Is the page in the expected state? (true/false)
+2. What is currently visible on the page?
+3. What action should be taken next?
+4. Are there any error messages or issues visible?
+
+Respond in JSON format:
+{
+  "isExpectedState": true/false,
+  "currentState": "description of what you see",
+  "nextAction": "what action to take",
+  "hasError": true/false,
+  "errorMessage": "error text if any",
+  "confidence": 0-100
+}`
+        : `You are analyzing a screenshot of the IMAI influencer marketing platform.
+
+Current URL: ${currentUrl}
+Context: ${context}
+
+Describe what you see on the page:
+1. What state is the page in?
+2. Are there any modals/dialogs open?
+3. Are there any error or success messages?
+4. What interactive elements are visible?
+
+Respond in JSON format:
+{
+  "pageState": "description",
+  "hasModal": true/false,
+  "hasError": true/false,
+  "hasSuccess": true/false,
+  "message": "any visible message",
+  "visibleButtons": ["list of visible button texts"],
+  "confidence": 0-100
+}`;
+
+      const response = await axios.post(
+        'https://openrouter.ai/api/v1/chat/completions',
+        {
+          model: 'openai/gpt-4o-mini',
+          messages: [
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: prompt },
+                { type: 'image_url', image_url: { url: `data:image/png;base64,${base64Image}` } }
+              ]
+            }
+          ],
+          max_tokens: 500
+        },
+        {
+          headers: {
+            'Authorization': `Bearer ${this.openRouterKey}`,
+            'Content-Type': 'application/json',
+            'HTTP-Referer': 'https://panel.influencerhq.io',
+            'X-Title': 'InfluencerHQ Agent'
+          }
+        }
+      );
+
+      const aiResponse = response.data.choices[0].message.content;
+
+      // Try to parse JSON from response
+      try {
+        const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const analysis = JSON.parse(jsonMatch[0]);
+          this.log('ai', `🤖 AI Analysis: ${analysis.currentState || analysis.pageState}`, { confidence: analysis.confidence });
+          return { success: true, analysis };
+        }
+      } catch (e) {
+        // Return raw response if JSON parsing fails
+      }
+
+      this.log('ai', `🤖 AI Response: ${aiResponse.substring(0, 200)}...`);
+      return { success: true, analysis: aiResponse };
+
+    } catch (error) {
+      this.log('warning', `AI analysis failed: ${error.message}`);
+      return { success: false, analysis: null, error: error.message };
+    }
+  }
+
+  /**
+   * Wait for a condition with AI verification
+   */
+  async waitForStateWithAI(context, expectedState, maxWaitMs = 30000, checkIntervalMs = 3000) {
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < maxWaitMs) {
+      const { success, analysis } = await this.analyzePageWithAI(context, expectedState);
+
+      if (success && analysis && typeof analysis === 'object') {
+        if (analysis.isExpectedState) {
+          this.log('success', `✅ AI confirmed: ${expectedState}`);
+          return { success: true, analysis };
+        }
+
+        if (analysis.hasError) {
+          this.log('warning', `⚠️ AI detected error: ${analysis.errorMessage}`);
+          return { success: false, analysis, error: analysis.errorMessage };
+        }
+
+        this.log('info', `⏳ Waiting... Current: ${analysis.currentState}`);
+      }
+
+      await this.page.waitForTimeout(checkIntervalMs);
+    }
+
+    this.log('warning', `⏱️ Timeout waiting for: ${expectedState}`);
+    return { success: false, timeout: true };
+  }
+
+  /**
+   * Extract campaign ID from JWT URL
    */
   extractCampaignId(campaignIdOrUrl) {
-    // If it's already a number, return it
     if (/^\d+$/.test(campaignIdOrUrl)) {
       return campaignIdOrUrl;
     }
 
-    // If it's a JWT URL, extract and decode the campaign ID
     if (campaignIdOrUrl.includes('/c/')) {
       try {
         const jwtToken = campaignIdOrUrl.split('/c/')[1];
         const payload = jwtToken.split('.')[1];
-        // Base64 decode the payload
         const decoded = JSON.parse(Buffer.from(payload, 'base64').toString('utf8'));
         if (decoded.campaign) {
           this.log('info', `Extracted campaign ID: ${decoded.campaign} from JWT`);
           return decoded.campaign.toString();
         }
       } catch (e) {
-        this.log('warning', `Failed to decode JWT, using URL as-is: ${e.message}`);
+        this.log('warning', `Failed to decode JWT: ${e.message}`);
       }
     }
 
-    // If it's a campaigns URL, extract the ID
     const match = campaignIdOrUrl.match(/\/campaigns\/(?:influencers\/)?(\d+)/);
-    if (match) {
-      return match[1];
-    }
+    if (match) return match[1];
 
     return campaignIdOrUrl;
   }
@@ -81,35 +212,27 @@ class ImaiAgentService extends EventEmitter {
     this.log('info', 'Navigating to IMAI login page...');
 
     try {
-      await this.page.goto('https://imai.co/login', { waitUntil: 'networkidle' });
+      await this.page.goto('https://imai.co/login', { waitUntil: 'networkidle', timeout: 60000 });
       this.log('info', 'Login page loaded');
 
-      // Wait for Angular app to fully render the form
+      // AI verification of login page
+      await this.analyzePageWithAI('Verifying login page loaded');
+
       await this.page.waitForSelector('input[name="username"]', { timeout: 15000 });
-      await this.page.waitForTimeout(1000);
+      await this.page.waitForTimeout(2000);
 
-      // Fill email/username field
-      this.log('info', 'Entering email...');
+      this.log('info', 'Entering credentials...');
       await this.page.fill('input[name="username"]', email);
-
-      // Fill password field
-      this.log('info', 'Entering password...');
       await this.page.fill('input[name="password"]', password);
 
-      // Click login button
       this.log('info', 'Clicking login button...');
       await this.page.click('button.btn-dark');
 
-      // Wait for navigation after login
       this.log('info', 'Waiting for authentication...');
-      await this.page.waitForURL(url => !url.href.includes('/login'), { timeout: 30000 });
+      await this.page.waitForURL(url => !url.href.includes('/login'), { timeout: 60000 });
 
-      // Check if login was successful
-      const currentUrl = this.page.url();
-      if (currentUrl.includes('/login') || currentUrl.includes('/signin')) {
-        const errorText = await this.page.textContent('.error, .alert-danger, [role="alert"]').catch(() => null);
-        throw new Error(errorText || 'Login failed - still on login page');
-      }
+      // AI verification of successful login
+      const loginCheck = await this.analyzePageWithAI('Verifying login success', 'User is logged in and on dashboard or campaigns page');
 
       this.isLoggedIn = true;
       this.log('success', 'Successfully logged into IMAI!');
@@ -121,118 +244,168 @@ class ImaiAgentService extends EventEmitter {
   }
 
   async navigateToCampaign(campaignIdOrUrl) {
-    if (!this.isLoggedIn) {
-      throw new Error('Not logged in');
-    }
+    if (!this.isLoggedIn) throw new Error('Not logged in');
 
-    // Extract numeric campaign ID
     const campaignId = this.extractCampaignId(campaignIdOrUrl);
     this.log('info', `Navigating to campaign influencers page (ID: ${campaignId})...`);
 
     try {
-      // Use the internal influencers URL format
       const campaignUrl = `https://imai.co/campaigns/influencers/${campaignId}`;
+      await this.page.goto(campaignUrl, { waitUntil: 'networkidle', timeout: 60000 });
 
-      await this.page.goto(campaignUrl, { waitUntil: 'networkidle' });
+      // AI verification
+      const navCheck = await this.waitForStateWithAI(
+        'Verifying campaign page loaded',
+        'Campaign influencers page is loaded with Add influencer button visible',
+        30000
+      );
 
-      // Wait for page to load
-      await this.page.waitForSelector('body', { timeout: 10000 });
-      await this.page.waitForTimeout(2000); // Wait for Angular app
+      if (!navCheck.success) {
+        throw new Error('Failed to confirm campaign page loaded');
+      }
 
-      // Wait for the "Add influencer" button to confirm we're on the right page
-      await this.page.waitForSelector('button.im-btn.im-btn-primary', { timeout: 10000 });
-
-      this.log('success', `Navigated to campaign influencers page`);
+      this.log('success', 'Navigated to campaign influencers page');
       return campaignId;
     } catch (error) {
-      this.log('error', `Failed to navigate to campaign`, { error: error.message });
+      this.log('error', 'Failed to navigate to campaign', { error: error.message });
       throw error;
     }
   }
 
-  async addInfluencer(username) {
-    if (!this.isLoggedIn) {
-      throw new Error('Not logged in');
-    }
+  async addInfluencerWithAI(username) {
+    if (!this.isLoggedIn) throw new Error('Not logged in');
 
-    this.log('info', `Adding influencer @${username} to campaign...`);
+    this.log('info', `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+    this.log('info', `🎯 Starting: Add @${username} to campaign`);
+    this.log('info', `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
 
     try {
-      // Step 1: Click "Add influencer" button (use text to avoid matching "New invite")
-      this.log('info', 'Looking for Add influencer button...');
+      // STEP 1: Click "Add influencer" button
+      this.log('info', '📍 Step 1: Looking for "Add influencer" button...');
+
+      // First verify the page state
+      let pageAnalysis = await this.analyzePageWithAI('Checking if Add influencer button is visible');
+
       const addButtonSelector = 'button:has-text("Add influencer")';
-      await this.page.waitForSelector(addButtonSelector, { timeout: 15000 });
+      await this.page.waitForSelector(addButtonSelector, { timeout: 20000 });
       await this.page.click(addButtonSelector);
-      this.log('info', 'Clicked Add influencer button');
+      this.log('info', '✓ Clicked "Add influencer" button');
 
-      // Step 2: Wait for modal to fully load
-      await this.page.waitForTimeout(3000);
+      // STEP 2: Wait for modal to open with AI verification
+      this.log('info', '📍 Step 2: Waiting for modal to open...');
+      const modalCheck = await this.waitForStateWithAI(
+        'Waiting for add influencer modal',
+        'Modal/dialog is open with an input field for entering profile URL or handle',
+        30000,
+        2000
+      );
 
-      // Step 3: Wait for input field to appear
+      if (!modalCheck.success) {
+        throw new Error('Modal did not open properly');
+      }
+
+      // STEP 3: Enter username
+      this.log('info', `📍 Step 3: Entering username: @${username}`);
       const inputSelector = 'input[placeholder="Profile URL, @handle or user ID"]';
-      await this.page.waitForSelector(inputSelector, { timeout: 15000 });
-      this.log('info', 'Modal opened, input field visible');
+      await this.page.waitForSelector(inputSelector, { timeout: 20000 });
 
-      // Step 4: Type the username slowly
+      // Clear and type slowly
       await this.page.fill(inputSelector, '');
-      await this.page.type(inputSelector, username, { delay: 100 });
-      this.log('info', `Entered username: ${username}`);
+      await this.page.waitForTimeout(500);
+      await this.page.type(inputSelector, username, { delay: 150 });
+      this.log('info', `✓ Entered: ${username}`);
 
-      // Step 5: Wait for IMAI to search and show dropdown results
-      this.log('info', 'Waiting for search results...');
-      await this.page.waitForTimeout(5000);
+      // STEP 4: Wait for search results with AI
+      this.log('info', '📍 Step 4: Waiting for search results dropdown...');
+      const searchCheck = await this.waitForStateWithAI(
+        `Waiting for search results for "${username}"`,
+        `Dropdown showing search results with "${username}" or similar usernames visible`,
+        20000,
+        2000
+      );
 
-      // Step 6: Click on the dropdown result that matches the username
-      const dropdownItemSelector = `span:text-is("${username}")`;
+      // STEP 5: Click on the result
+      this.log('info', '📍 Step 5: Selecting from dropdown...');
+
+      // Try exact match first
       try {
-        await this.page.waitForSelector(dropdownItemSelector, { timeout: 10000 });
-        await this.page.click(dropdownItemSelector);
-        this.log('info', `Selected ${username} from dropdown`);
-      } catch (e) {
-        // Try alternative: click first typeahead result
-        this.log('info', 'Exact match not found, trying first result...');
-        const firstResult = await this.page.$('ngb-typeahead-window button, .dropdown-item, [role="option"]');
+        const exactMatch = `span:text-is("${username}")`;
+        await this.page.waitForSelector(exactMatch, { timeout: 5000 });
+        await this.page.click(exactMatch);
+        this.log('info', `✓ Selected exact match: ${username}`);
+      } catch {
+        // Try clicking first typeahead result
+        this.log('info', 'Exact match not found, selecting first result...');
+        const firstResult = await this.page.$('ngb-typeahead-window button, .dropdown-item');
         if (firstResult) {
           await firstResult.click();
-          this.log('info', 'Selected first typeahead result');
+          this.log('info', '✓ Selected first dropdown result');
         } else {
-          throw new Error(`Username ${username} not found in dropdown`);
+          throw new Error('No search results found for username');
         }
       }
 
-      // Step 7: Wait for selection to register
+      // STEP 6: Wait for confirmation dialog with AI
+      this.log('info', '📍 Step 6: Waiting for confirmation dialog...');
+      await this.page.waitForTimeout(3000);
+
+      const confirmCheck = await this.waitForStateWithAI(
+        'Waiting for Yes/No confirmation',
+        'Confirmation dialog is visible with Yes button',
+        20000,
+        2000
+      );
+
+      // STEP 7: Click Yes
+      this.log('info', '📍 Step 7: Clicking "Yes" to confirm...');
+      const yesButton = 'button.btn-success';
+      await this.page.waitForSelector(yesButton, { timeout: 15000 });
+      await this.page.click(yesButton);
+      this.log('info', '✓ Clicked Yes button');
+
+      // STEP 8: Wait for completion with AI verification
+      this.log('info', '📍 Step 8: Waiting for addition to complete...');
+      const completionCheck = await this.waitForStateWithAI(
+        `Verifying ${username} was added`,
+        'Modal is closed and we are back on the influencers list page, or success message is shown',
+        30000,
+        3000
+      );
+
+      // Final verification
+      this.log('info', '📍 Step 9: Final verification...');
       await this.page.waitForTimeout(2000);
 
-      // Step 8: Click the "Yes" confirmation button
-      this.log('info', 'Looking for Yes button...');
-      const confirmButtonSelector = 'button.btn-success:has-text("Yes")';
-      await this.page.waitForSelector(confirmButtonSelector, { timeout: 10000 });
-      await this.page.click(confirmButtonSelector);
-      this.log('info', 'Clicked Yes confirmation button');
+      const finalCheck = await this.analyzePageWithAI(
+        `Confirming @${username} is now in the campaign list`,
+        `The influencer ${username} appears in the list or the modal has closed successfully`
+      );
 
-      // Step 9: Wait for the popup to close and addition to complete
-      this.log('info', 'Waiting for addition to complete...');
-      await this.page.waitForTimeout(5000);
-
-      // Step 10: Verify the influencer was added
-      this.log('success', `Successfully added @${username} to campaign`);
+      this.log('success', `✅ Successfully added @${username} to campaign!`);
       return { success: true, username };
 
     } catch (error) {
-      // Check if it's an "already exists" error
-      const errorMsg = await this.page.textContent('.alert-danger, .error-message, .toast-error, .modal-body').catch(() => '');
-      if (errorMsg && errorMsg.toLowerCase().includes('already')) {
-        this.log('warning', `@${username} already exists in campaign`);
-        return { success: false, username, reason: 'already_exists' };
+      this.log('error', `❌ Failed to add @${username}: ${error.message}`);
+
+      // Check for "already exists" via AI
+      const errorCheck = await this.analyzePageWithAI('Checking if error indicates user already exists');
+      if (errorCheck.analysis && typeof errorCheck.analysis === 'object') {
+        if (errorCheck.analysis.hasError && errorCheck.analysis.errorMessage?.toLowerCase().includes('already')) {
+          this.log('warning', `⚠️ @${username} already exists in campaign`);
+          return { success: false, username, reason: 'already_exists' };
+        }
       }
 
-      this.log('error', `Failed to add @${username}`, { error: error.message });
+      // Add to failed list for retry
+      this.failedCreators.push(username);
       return { success: false, username, reason: error.message };
     }
   }
 
   async runAgentForClient(client, imaiCredentials, creators) {
     this.isRunning = true;
+    this.failedCreators = [];
+
     const results = {
       total: creators.length,
       added: 0,
@@ -242,25 +415,29 @@ class ImaiAgentService extends EventEmitter {
     };
 
     try {
-      this.log('info', 'Starting IMAI agent run');
+      this.log('info', '╔══════════════════════════════════════════════════╗');
+      this.log('info', '║       IMAI AI-POWERED AGENT STARTING             ║');
+      this.log('info', '╚══════════════════════════════════════════════════╝');
       this.log('info', `Client: ${client.name}`);
-      this.log('info', `Campaign ID: ${client.imaiCampaignId}`);
+      this.log('info', `Campaign: ${client.imaiCampaignId}`);
       this.log('info', `Creators to add: ${creators.length}`);
+      this.log('info', `AI Model: GPT-4o-mini via OpenRouter`);
+      this.log('info', '');
 
-      // Initialize browser
+      // Initialize
       await this.initialize();
 
-      // Login to IMAI
+      // Login
       await this.login(imaiCredentials.email, imaiCredentials.password);
 
-      // Navigate to campaign (returns the extracted campaign ID)
-      const campaignId = await this.navigateToCampaign(client.imaiCampaignId);
+      // Navigate to campaign
+      await this.navigateToCampaign(client.imaiCampaignId);
 
-      // Add each creator
+      // Process each creator
       for (let i = 0; i < creators.length; i++) {
         const creator = creators[i];
 
-        // Skip unknown or empty usernames
+        // Skip invalid usernames
         if (!creator.username || creator.username === 'unknown') {
           this.log('warning', `Skipping invalid username: ${creator.username}`);
           results.skipped++;
@@ -268,31 +445,71 @@ class ImaiAgentService extends EventEmitter {
           continue;
         }
 
-        this.log('info', `Processing ${i + 1}/${creators.length}: @${creator.username}`);
+        this.log('info', '');
+        this.log('info', `═══════════════════════════════════════════════════`);
+        this.log('info', `  Processing ${i + 1}/${creators.length}: @${creator.username}`);
+        this.log('info', `═══════════════════════════════════════════════════`);
 
-        try {
-          const result = await this.addInfluencer(creator.username);
-          results.details.push(result);
+        const result = await this.addInfluencerWithAI(creator.username);
+        results.details.push(result);
 
-          if (result.success) {
-            results.added++;
-          } else if (result.reason === 'already_exists') {
-            results.skipped++;
-          } else {
-            results.failed++;
-          }
-
-          // Delay between additions (IMAI is slow, need ~5s between each)
-          await this.page.waitForTimeout(5000);
-        } catch (error) {
-          this.log('error', `Error processing @${creator.username}`, { error: error.message });
+        if (result.success) {
+          results.added++;
+        } else if (result.reason === 'already_exists') {
+          results.skipped++;
+        } else {
           results.failed++;
-          results.details.push({ success: false, username: creator.username, reason: error.message });
+        }
+
+        // 30 second wait between creators
+        if (i < creators.length - 1) {
+          this.log('info', '');
+          this.log('info', '⏳ Waiting 30 seconds before next creator...');
+          await this.page.waitForTimeout(30000);
         }
       }
 
-      this.log('success', 'Agent run completed');
-      this.log('info', `Results: ${results.added} added, ${results.skipped} skipped, ${results.failed} failed`);
+      // RETRY FAILED CREATORS
+      if (this.failedCreators.length > 0) {
+        this.log('info', '');
+        this.log('info', '╔══════════════════════════════════════════════════╗');
+        this.log('info', '║       RETRYING FAILED CREATORS                   ║');
+        this.log('info', '╚══════════════════════════════════════════════════╝');
+        this.log('info', `Retrying ${this.failedCreators.length} failed creators...`);
+
+        // Refresh the page before retry
+        await this.page.reload({ waitUntil: 'networkidle' });
+        await this.page.waitForTimeout(5000);
+
+        for (const username of [...this.failedCreators]) {
+          this.log('info', `🔄 Retry attempt: @${username}`);
+
+          const retryResult = await this.addInfluencerWithAI(username);
+
+          if (retryResult.success) {
+            // Update results
+            results.failed--;
+            results.added++;
+            this.failedCreators = this.failedCreators.filter(u => u !== username);
+
+            // Update details
+            const existingIndex = results.details.findIndex(d => d.username === username && !d.success);
+            if (existingIndex >= 0) {
+              results.details[existingIndex] = retryResult;
+            }
+          }
+
+          await this.page.waitForTimeout(30000);
+        }
+      }
+
+      this.log('info', '');
+      this.log('success', '╔══════════════════════════════════════════════════╗');
+      this.log('success', '║       AGENT RUN COMPLETED                        ║');
+      this.log('success', '╚══════════════════════════════════════════════════╝');
+      this.log('info', `✅ Added: ${results.added}`);
+      this.log('info', `⏭️ Skipped: ${results.skipped}`);
+      this.log('info', `❌ Failed: ${results.failed}`);
 
     } catch (error) {
       this.log('error', 'Agent run failed', { error: error.message });
@@ -332,5 +549,4 @@ class ImaiAgentService extends EventEmitter {
   }
 }
 
-// Export a singleton instance
 module.exports = new ImaiAgentService();
