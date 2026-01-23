@@ -217,47 +217,92 @@ class ImaiAgentService extends EventEmitter {
 
   /**
    * Check if influencer already exists in the campaign (by looking at page content)
+   * Uses multiple detection methods for reliability
    */
   async checkInfluencerExistsInCampaign(username) {
     try {
-      // Normalize username (remove @)
+      // Normalize username (remove @ and lowercase)
       const cleanUsername = username.replace('@', '').toLowerCase();
+      this.log('info', `🔍 Checking if @${cleanUsername} already exists in campaign...`);
 
-      // Check if the username appears in the page content
+      // METHOD 1: Direct DOM check - look for username in participant links/rows
+      // IMAI shows participants as @username links in a table
+      const participantSelectors = [
+        // Link with @username text
+        `a:has-text("@${cleanUsername}")`,
+        `a:has-text("${cleanUsername}")`,
+        // Table cell containing username
+        `td a[href*="${cleanUsername}"]`,
+        // Any element with the exact username
+        `[class*="participant"] :text-is("@${cleanUsername}")`,
+        `[class*="participant"] :text-is("${cleanUsername}")`,
+        // Rows in participant table
+        `tr:has-text("${cleanUsername}")`,
+      ];
+
+      for (const selector of participantSelectors) {
+        try {
+          const element = await this.page.$(selector);
+          if (element) {
+            // Verify it's in the participants section, not elsewhere
+            const isVisible = await element.isVisible();
+            if (isVisible) {
+              this.log('info', `✓ Found @${cleanUsername} via selector: ${selector}`);
+              return true;
+            }
+          }
+        } catch (e) {
+          // Selector didn't match, continue to next
+        }
+      }
+
+      // METHOD 2: Check page HTML content directly
       const pageContent = await this.page.content();
       const pageContentLower = pageContent.toLowerCase();
 
-      // Look for the username in the page (it would appear in the influencers table)
-      if (pageContentLower.includes(cleanUsername)) {
-        // Double-check with a more specific selector
-        const existingInfluencer = await this.page.$(`text=${cleanUsername}`);
-        if (existingInfluencer) {
-          this.log('info', `🔍 Found "${cleanUsername}" in page content, checking if it's in influencer list...`);
+      // Look for username in participant-related contexts
+      // Pattern: the username appears near "participant" or in a table row with follower counts
+      const usernameInPage = pageContentLower.includes(cleanUsername);
 
-          // Use AI to verify
-          const verifyResult = await this.analyzePageWithAI(
-            `Check if the influencer @${cleanUsername} already exists in the campaign participants list`,
-            `The influencer @${cleanUsername} is visible in the participants/influencers list`
-          );
+      if (usernameInPage) {
+        // Check if it appears in a participant context (not just anywhere)
+        // Look for patterns like: @username</a> or href containing username
+        const patterns = [
+          new RegExp(`@${cleanUsername}\\s*</a>`, 'i'),
+          new RegExp(`>${cleanUsername}</a>`, 'i'),
+          new RegExp(`href="[^"]*${cleanUsername}[^"]*"`, 'i'),
+          // Also check for username in table rows with typical metrics (followers, engagement)
+          new RegExp(`${cleanUsername}[^<]*\\d+[.,]?\\d*k?\\s*(followers|engagement)?`, 'i'),
+        ];
 
-          if (verifyResult.success && verifyResult.analysis) {
-            const analysis = verifyResult.analysis;
-            if (typeof analysis === 'object' && analysis.isExpectedState) {
-              return true;
-            }
-            // Also check the text response
-            const responseText = JSON.stringify(analysis).toLowerCase();
-            if (responseText.includes('already') ||
-                responseText.includes('exists') ||
-                responseText.includes('found') ||
-                responseText.includes('visible in') ||
-                responseText.includes('participant')) {
-              return true;
-            }
+        for (const pattern of patterns) {
+          if (pattern.test(pageContent)) {
+            this.log('info', `✓ Found @${cleanUsername} via HTML pattern match`);
+            return true;
           }
         }
       }
 
+      // METHOD 3: Use evaluate to check within participant table specifically
+      try {
+        const existsInTable = await this.page.evaluate((username) => {
+          // Find all links/text that might contain usernames in participant area
+          const participantSection = document.querySelector('[class*="participant"], table, .influencer-list');
+          if (!participantSection) return false;
+
+          const text = participantSection.textContent.toLowerCase();
+          return text.includes(username.toLowerCase()) || text.includes('@' + username.toLowerCase());
+        }, cleanUsername);
+
+        if (existsInTable) {
+          this.log('info', `✓ Found @${cleanUsername} in participant section via JS evaluate`);
+          return true;
+        }
+      } catch (e) {
+        // Evaluate failed, continue
+      }
+
+      this.log('info', `✗ @${cleanUsername} not found in campaign`);
       return false;
     } catch (error) {
       this.log('warning', `Error checking if influencer exists: ${error.message}`);
@@ -791,26 +836,149 @@ Respond in JSON format:
         2000
       );
 
-      // STEP 5: Click on the result
+      // STEP 5: Click on the result from dropdown
       this.log('info', '📍 Step 5: Selecting from dropdown...');
 
-      // Try exact match first
-      try {
-        const exactMatch = `span:text-is("${username}")`;
-        await this.page.waitForSelector(exactMatch, { timeout: 5000 });
-        await this.page.click(exactMatch);
-        this.log('info', `✓ Selected exact match: ${username}`);
-      } catch {
-        // Try clicking first typeahead result
-        this.log('info', 'Exact match not found, selecting first result...');
-        const firstResult = await this.page.$('ngb-typeahead-window button, .dropdown-item');
-        if (firstResult) {
-          await firstResult.click();
-          this.log('info', '✓ Selected first dropdown result');
-        } else {
-          throw new Error('No search results found for username');
+      // Wait a moment for dropdown to fully render
+      await this.page.waitForTimeout(1500);
+
+      // Try multiple selector strategies for IMAI's typeahead dropdown
+      const dropdownSelectors = [
+        // NgBootstrap typeahead selectors
+        'ngb-typeahead-window button',
+        'ngb-typeahead-window .dropdown-item',
+        'ngb-typeahead-window [role="option"]',
+        // Generic autocomplete/dropdown patterns
+        '.typeahead-popup button',
+        '.typeahead-popup .dropdown-item',
+        '.autocomplete-results button',
+        '.autocomplete-results .result-item',
+        '.search-results button',
+        '.search-results .result-item',
+        // Angular Material autocomplete
+        'mat-option',
+        '.mat-autocomplete-panel mat-option',
+        // Generic dropdown patterns
+        '[role="listbox"] [role="option"]',
+        '.dropdown-menu button',
+        '.dropdown-menu .dropdown-item',
+        '.dropdown-menu a',
+        // List-based results
+        'ul.dropdown-menu li',
+        'ul.dropdown-menu li a',
+        'ul.dropdown-menu li button',
+        // Any clickable item in a dropdown container
+        '[class*="dropdown"] button:visible',
+        '[class*="typeahead"] button:visible',
+        '[class*="autocomplete"] [class*="item"]:visible',
+      ];
+
+      let clicked = false;
+
+      // First, try to find an exact match for the username
+      const exactMatchSelectors = [
+        `span:text-is("${username}")`,
+        `span:text-is("@${username}")`,
+        `button:has-text("${username}")`,
+        `a:has-text("${username}")`,
+        `div:has-text("${username}"):not(:has(*:has-text("${username}")))`, // Innermost element
+        `[role="option"]:has-text("${username}")`,
+      ];
+
+      for (const selector of exactMatchSelectors) {
+        try {
+          const element = await this.page.$(selector);
+          if (element) {
+            const isVisible = await element.isVisible().catch(() => false);
+            if (isVisible) {
+              await element.click();
+              this.log('info', `✓ Selected exact match via: ${selector}`);
+              clicked = true;
+              break;
+            }
+          }
+        } catch (e) {
+          // Continue to next selector
         }
       }
+
+      // If exact match failed, try to click first result in dropdown
+      if (!clicked) {
+        this.log('info', 'Exact match not found, looking for first dropdown result...');
+
+        for (const selector of dropdownSelectors) {
+          try {
+            const element = await this.page.$(selector);
+            if (element) {
+              const isVisible = await element.isVisible().catch(() => false);
+              if (isVisible) {
+                await element.click();
+                this.log('info', `✓ Selected first result via: ${selector}`);
+                clicked = true;
+                break;
+              }
+            }
+          } catch (e) {
+            // Continue to next selector
+          }
+        }
+      }
+
+      // If still not clicked, try using page.evaluate to find and click
+      if (!clicked) {
+        this.log('info', 'Standard selectors failed, trying JS evaluate...');
+
+        const evaluateClicked = await this.page.evaluate((username) => {
+          // Look for any dropdown/typeahead visible on page
+          const dropdownContainers = document.querySelectorAll(
+            'ngb-typeahead-window, [class*="typeahead"], [class*="dropdown"], [class*="autocomplete"], [role="listbox"]'
+          );
+
+          for (const container of dropdownContainers) {
+            if (container.offsetParent === null) continue; // Skip hidden
+
+            // Find clickable items within
+            const items = container.querySelectorAll('button, a, [role="option"], .dropdown-item, li');
+            for (const item of items) {
+              if (item.offsetParent === null) continue; // Skip hidden
+
+              const text = item.textContent.toLowerCase();
+              if (text.includes(username.toLowerCase())) {
+                item.click();
+                return { clicked: true, text: item.textContent };
+              }
+            }
+
+            // If no match, just click the first visible item
+            for (const item of items) {
+              if (item.offsetParent !== null) {
+                item.click();
+                return { clicked: true, text: item.textContent, firstItem: true };
+              }
+            }
+          }
+
+          return { clicked: false };
+        }, username);
+
+        if (evaluateClicked.clicked) {
+          this.log('info', `✓ Selected via JS evaluate: "${evaluateClicked.text}"${evaluateClicked.firstItem ? ' (first item)' : ''}`);
+          clicked = true;
+        }
+      }
+
+      // Final fallback: press Enter to select first result
+      if (!clicked) {
+        this.log('info', 'All selectors failed, trying Enter key to select...');
+        await this.page.keyboard.press('ArrowDown');
+        await this.page.waitForTimeout(300);
+        await this.page.keyboard.press('Enter');
+        this.log('info', '✓ Pressed Enter to select');
+        clicked = true; // Assume it worked, will verify in next step
+      }
+
+      // Brief wait for selection to register
+      await this.page.waitForTimeout(1000);
 
       // STEP 6: Wait for confirmation dialog with AI
       this.log('info', '📍 Step 6: Waiting for confirmation dialog...');
