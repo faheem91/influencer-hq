@@ -5,6 +5,9 @@ import "./globals.css";
 
 const inter = Inter({ subsets: ["latin"] });
 
+// Force dynamic rendering to avoid Clerk SSG issues with missing publishableKey at build time
+export const dynamic = "force-dynamic";
+
 export const metadata: Metadata = {
   title: "Influencer HQ - Social Media Tracking",
   description: "Manage brands, track social media mentions, and automate creator discovery",
