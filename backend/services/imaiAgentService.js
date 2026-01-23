@@ -349,12 +349,22 @@ Respond in JSON format:
 
       // Check if AI detected login page - check all possible fields
       const analysisStr = JSON.stringify(pageAnalysis.analysis || '').toLowerCase();
-      if (analysisStr.includes('login') || analysisStr.includes('password') || analysisStr.includes('sign in') || analysisStr.includes('email field')) {
-        this.log('warning', '⚠️ AI detected login page in Step 1, re-logging in...');
+      this.log('info', `🔍 Checking for login keywords in: ${analysisStr.substring(0, 100)}...`);
+
+      const isLoginPage = analysisStr.includes('login') ||
+                          analysisStr.includes('password') ||
+                          analysisStr.includes('sign in') ||
+                          analysisStr.includes('email field') ||
+                          analysisStr.includes('email and password');
+
+      if (isLoginPage) {
+        this.log('warning', '⚠️ LOGIN PAGE DETECTED! Re-logging in...');
         this.isLoggedIn = false;
         await this.login(credentials.email, credentials.password);
+        this.log('info', '✅ Re-login complete, navigating back to campaign...');
         await this.navigateToCampaign(campaignId);
         // Re-verify we're now on the right page
+        this.log('info', '🔍 Verifying page after re-login...');
         pageAnalysis = await this.analyzePageWithAI('Verifying Add influencer button is now visible after re-login');
       }
 
