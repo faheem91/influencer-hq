@@ -498,7 +498,7 @@ Respond in JSON format:
     this.log('info', 'Navigating to IMAI login page...');
 
     try {
-      await this.page.goto('https://imai.co/login', { waitUntil: 'networkidle', timeout: 60000 });
+      await this.page.goto('https://imai.co/login', { waitUntil: 'domcontentloaded', timeout: 30000 });
       this.log('info', 'Login page loaded');
 
       // AI verification of login page
@@ -537,7 +537,7 @@ Respond in JSON format:
 
     try {
       const campaignUrl = `https://imai.co/campaigns/influencers/${campaignId}`;
-      await this.page.goto(campaignUrl, { waitUntil: 'networkidle', timeout: 60000 });
+      await this.page.goto(campaignUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
       // Check URL immediately - if redirected to login, we need to re-auth
       const currentUrl = this.page.url();
@@ -936,7 +936,7 @@ Respond in JSON format:
         if (!modalClosed) {
           // Modal couldn't be closed, refresh the page
           this.log('info', '🔄 Refreshing page to clear stuck modal...');
-          await this.page.reload({ waitUntil: 'networkidle', timeout: 30000 });
+          await this.page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 });
           await this.page.waitForTimeout(2000);
 
           // Navigate back to campaign if needed
@@ -1231,7 +1231,7 @@ Respond in JSON format:
       if (!modalClosed) {
         this.log('info', '🔄 Refreshing page to reset state...');
         try {
-          await this.page.reload({ waitUntil: 'networkidle', timeout: 30000 });
+          await this.page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 });
           await this.page.waitForTimeout(2000);
 
           // Check if we're still on the campaign page, navigate if needed
